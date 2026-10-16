@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
 <meta name="color-scheme" content="dark" />
 <link rel="icon" href="data:," />
-<title>Captain Rocco — Jet Cockpit</title>
+<title>Captain Rocco — Airliner Cockpit</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@600;700;800&family=Barlow+Condensed:wght@500;600;700&family=Barlow:wght@500;600;700&display=swap" rel="stylesheet">
@@ -152,19 +152,20 @@
 <div id="startOverlay">
   <div class="startInner">
     <div class="startTitle">CAPTAIN <span class="jet">ROCCO</span></div>
-    <div class="startSub">Jet Cockpit</div>
+    <div class="startSub">Airlines</div>
     <button id="startBtn" type="button">START ENGINES</button>
-    <div class="startHint">sound on for the full roar</div>
+    <div class="startHint">sound on for the engines</div>
   </div>
 </div>
 
 <script>
 "use strict";
 /* ============================================================
-   CAPTAIN ROCCO — JET COCKPIT
-   A first-person jet flight simulator for a 3-year-old captain.
+   CAPTAIN ROCCO — AIRLINER COCKPIT (v3)
+   A calm, toddler-proof commercial jet flight deck.
+   Take off, cruise above the clouds, press LAND and the jet
+   lands itself. It cannot crash — the plane helps him fly.
    Everything is drawn on canvas and synthesized with WebAudio.
-   No fail states: the jet cannot crash, stall, or run out of sky.
    ============================================================ */
 
 const canvas = document.getElementById('game');
@@ -197,6 +198,7 @@ function lerpColor(c1, c2, t){
 const css = c => 'rgb(' + c[0] + ',' + c[1] + ',' + c[2] + ')';
 function hash2(i, j){ const s = Math.sin(i * 127.1 + j * 311.7) * 43758.5453; return s - Math.floor(s); }
 function fmtInt(n){ return Math.round(n).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ','); }
+function fmtHdg(h){ const r = ((Math.round(h) % 360) + 360) % 360; return String(r === 0 ? 360 : r).padStart(3, '0'); }
 function roundRectPath(c, x, y, w, h, r){
   r = Math.min(r, w / 2, h / 2);
   c.beginPath();
@@ -209,14 +211,17 @@ function roundRectPath(c, x, y, w, h, r){
 }
 function inRect(x, y, r){ return x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h; }
 const easeInOut = t => t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+const smooth = t => t * t * (3 - 2 * t);
 
 /* ============================================================
-   AUDIO — turbine + wind loops, all synthesized.
-   Created on START ENGINES (which is also the audio unlock).
+   AUDIO — quiet airliner fan hum + soft rumble. No roar.
+   Master sits well below v2. The DING is the loudest event,
+   and even the DING is mellow.
    ============================================================ */
 const AudioSys = {
-  ctx: null, master: null, muted: false,
-  turbGain: null, turbFilter: null, whineOsc: null, whineGain: null,
+  ctx: null, master: null, muted: false, noiseBuf: null,
+  fanGain: null, fanOsc1: null, fanOsc2: null,
+  whineOsc: null, whineGain: null,
   windGain: null, windFilter: null, rumbleGain: null,
   init(){
     if (this.ctx) { if (this.ctx.state === 'suspended') this.ctx.resume(); return; }
@@ -224,10 +229,9 @@ const AudioSys = {
     if (!AC) return;
     const ac = this.ctx = new AC();
     this.master = ac.createGain();
-    this.master.gain.value = this.muted ? 0 : 0.85;
+    this.master.gain.value = this.muted ? 0 : 0.5;
     this.master.connect(ac.destination);
 
-    /* shared noise buffer */
     const len = ac.sampleRate * 2;
     const buf = ac.createBuffer(1, len, ac.sampleRate);
     const d = buf.getChannelData(0);
@@ -235,48 +239,54 @@ const AudioSys = {
     this.noiseBuf = buf;
     const mkSrc = () => { const s = ac.createBufferSource(); s.buffer = buf; s.loop = true; return s; };
 
-    /* turbine roar: noise through a bandpass that follows throttle */
-    this.turbFilter = ac.createBiquadFilter();
-    this.turbFilter.type = 'bandpass'; this.turbFilter.frequency.value = 620; this.turbFilter.Q.value = 0.7;
-    this.turbGain = ac.createGain(); this.turbGain.gain.value = 0;
-    const tSrc = mkSrc();
-    tSrc.connect(this.turbFilter); this.turbFilter.connect(this.turbGain); this.turbGain.connect(this.master);
-    tSrc.start();
+    /* fan hum: two softly detuned low sines */
+    this.fanGain = ac.createGain(); this.fanGain.gain.value = 0;
+    this.fanGain.connect(this.master);
+    this.fanOsc1 = ac.createOscillator(); this.fanOsc1.type = 'sine'; this.fanOsc1.frequency.value = 72;
+    this.fanOsc2 = ac.createOscillator(); this.fanOsc2.type = 'sine'; this.fanOsc2.frequency.value = 145;
+    const f2g = ac.createGain(); f2g.gain.value = 0.38;
+    this.fanOsc1.connect(this.fanGain);
+    this.fanOsc2.connect(f2g); f2g.connect(this.fanGain);
+    this.fanOsc1.start(); this.fanOsc2.start();
 
-    /* turbine whine: the spool-up singer */
-    this.whineOsc = ac.createOscillator(); this.whineOsc.type = 'sawtooth'; this.whineOsc.frequency.value = 140;
-    const whineLP = ac.createBiquadFilter(); whineLP.type = 'lowpass'; whineLP.frequency.value = 1500;
+    /* a whisper of fan whine, kept far below piercing */
+    this.whineOsc = ac.createOscillator(); this.whineOsc.type = 'triangle'; this.whineOsc.frequency.value = 560;
+    const wLP = ac.createBiquadFilter(); wLP.type = 'lowpass'; wLP.frequency.value = 1700;
     this.whineGain = ac.createGain(); this.whineGain.gain.value = 0;
-    this.whineOsc.connect(whineLP); whineLP.connect(this.whineGain); this.whineGain.connect(this.master);
+    this.whineOsc.connect(wLP); wLP.connect(this.whineGain); this.whineGain.connect(this.master);
     this.whineOsc.start();
 
-    /* wind rush */
-    this.windFilter = ac.createBiquadFilter();
-    this.windFilter.type = 'bandpass'; this.windFilter.frequency.value = 540; this.windFilter.Q.value = 0.45;
-    this.windGain = ac.createGain(); this.windGain.gain.value = 0;
-    const wSrc = mkSrc();
-    wSrc.connect(this.windFilter); this.windFilter.connect(this.windGain); this.windGain.connect(this.master);
-    wSrc.start();
-
-    /* low rumble (gear transit + afterburner) */
-    const rLP = ac.createBiquadFilter(); rLP.type = 'lowpass'; rLP.frequency.value = 150;
+    /* engine + runway rumble: noise through a lowpass */
+    const rLP = ac.createBiquadFilter(); rLP.type = 'lowpass'; rLP.frequency.value = 300;
     this.rumbleGain = ac.createGain(); this.rumbleGain.gain.value = 0;
     const rSrc = mkSrc();
     rSrc.connect(rLP); rLP.connect(this.rumbleGain); this.rumbleGain.connect(this.master);
     rSrc.start();
+
+    /* soft wind */
+    this.windFilter = ac.createBiquadFilter();
+    this.windFilter.type = 'bandpass'; this.windFilter.frequency.value = 620; this.windFilter.Q.value = 0.5;
+    this.windGain = ac.createGain(); this.windGain.gain.value = 0;
+    const wSrc = mkSrc();
+    wSrc.connect(this.windFilter); this.windFilter.connect(this.windGain); this.windGain.connect(this.master);
+    wSrc.start();
   },
   /* called every frame once running */
-  update(spool, throttle, speed, afterburner, gearTransit){
+  update(spool, throttle, speed, onGround, gearTransit){
     if (!this.ctx) return;
     const t = this.ctx.currentTime;
-    const sp = spool;
-    this.whineOsc.frequency.setTargetAtTime(130 + sp * 190 + throttle * 640 + (afterburner ? 240 : 0), t, 0.09);
-    this.whineGain.gain.setTargetAtTime(sp * (0.010 + throttle * 0.026), t, 0.09);
-    this.turbFilter.frequency.setTargetAtTime(480 + throttle * 950 + (afterburner ? 320 : 0), t, 0.12);
-    this.turbGain.gain.setTargetAtTime(sp * (0.045 + throttle * 0.105 + (afterburner ? 0.05 : 0)), t, 0.12);
-    this.windFilter.frequency.setTargetAtTime(380 + speed * 1.15, t, 0.15);
-    this.windGain.gain.setTargetAtTime(sp * clamp(speed / 820, 0, 1) * 0.13, t, 0.15);
-    this.rumbleGain.gain.setTargetAtTime(gearTransit > 0 ? 0.085 : (afterburner ? 0.05 : 0), t, 0.1);
+    const n1 = spool * (0.3 + 0.7 * throttle);
+    this.fanOsc1.frequency.setTargetAtTime(62 + n1 * 48, t, 0.16);
+    this.fanOsc2.frequency.setTargetAtTime((62 + n1 * 48) * 2.01, t, 0.16);
+    this.fanGain.gain.setTargetAtTime(spool * (0.020 + throttle * 0.032), t, 0.16);
+    this.whineOsc.frequency.setTargetAtTime(460 + n1 * 520, t, 0.2);
+    this.whineGain.gain.setTargetAtTime(spool * throttle * 0.005, t, 0.2);
+    let rum = spool * (0.013 + throttle * 0.018);
+    if (onGround) rum += clamp(speed / 150, 0, 1) * 0.045;
+    if (gearTransit > 0) rum += 0.018;
+    this.rumbleGain.gain.setTargetAtTime(rum, t, 0.12);
+    this.windFilter.frequency.setTargetAtTime(400 + speed * 0.9, t, 0.2);
+    this.windGain.gain.setTargetAtTime(spool * clamp(speed / 480, 0, 1) * 0.04 * (onGround ? 0.35 : 1), t, 0.2);
   },
   tone(f0, f1, dur, type, vol, delay){
     if (!this.ctx) return;
@@ -304,68 +314,75 @@ const AudioSys = {
     src.connect(f); f.connect(g); g.connect(this.master);
     src.start(t0); src.stop(t0 + dur + 0.05);
   },
-  click(){ this.noiseBurst(0.05, 2400, 0.16, 0); this.tone(1500, 900, 0.045, 'square', 0.05, 0); },
-  detent(){ this.noiseBurst(0.07, 1500, 0.2, 0); this.tone(220, 140, 0.09, 'sine', 0.16, 0); },
+  click(){ this.noiseBurst(0.04, 2200, 0.06, 0); this.tone(1300, 900, 0.04, 'square', 0.018, 0); },
   clunk(v){
-    this.tone(95, 48, 0.22, 'sine', 0.30 * (v || 1), 0);
-    this.noiseBurst(0.16, 300, 0.20 * (v || 1), 0, 'lowpass');
+    this.tone(86, 45, 0.2, 'sine', 0.15 * (v || 1), 0);
+    this.noiseBurst(0.14, 260, 0.09 * (v || 1), 0, 'lowpass');
   },
-  squelch(delay){
-    this.noiseBurst(0.14, 1500, 0.13, delay || 0);
-    this.noiseBurst(0.09, 1100, 0.10, (delay || 0) + 0.17);
+  /* the cabin DING — soft two-tone seatbelt chime */
+  ding(){
+    this.tone(831, 831, 0.55, 'sine', 0.12, 0);
+    this.tone(622, 622, 0.75, 'sine', 0.12, 0.30);
   },
+  celebrate(){
+    this.ding();
+    const notes = [523, 659, 784, 1047];
+    for (let i = 0; i < notes.length; i++) this.tone(notes[i], notes[i], 0.36, 'sine', 0.07, 0.8 + i * 0.13);
+  },
+  positiveRate(){
+    this.tone(1046, 1046, 0.07, 'sine', 0.04, 0);
+    this.tone(1046, 1046, 0.07, 'sine', 0.04, 0.17);
+  },
+  squelch(delay){ this.noiseBurst(0.07, 1400, 0.045, delay || 0); },
   radioChatter(){
     this.squelch(0);
-    this.tone(880, 880, 0.09, 'sine', 0.10, 0.30);
-    this.tone(659, 659, 0.09, 'sine', 0.10, 0.44);
-    this.tone(988, 988, 0.13, 'sine', 0.10, 0.58);
-    this.squelch(1.35);
-    this.tone(784, 784, 0.10, 'sine', 0.09, 1.62);
-    this.tone(1046, 1046, 0.14, 'sine', 0.09, 1.78);
+    this.tone(880, 880, 0.08, 'sine', 0.045, 0.16);
+    this.tone(659, 659, 0.08, 'sine', 0.045, 0.30);
+    this.tone(988, 988, 0.11, 'sine', 0.045, 0.44);
+    this.squelch(0.95);
   },
-  apOn(){ this.tone(740, 740, 0.09, 'sine', 0.10, 0); this.tone(988, 988, 0.12, 'sine', 0.10, 0.11); },
-  apOff(){ this.tone(988, 988, 0.09, 'sine', 0.09, 0); this.tone(740, 740, 0.12, 'sine', 0.09, 0.11); },
+  apOn(){ this.tone(740, 740, 0.09, 'sine', 0.05, 0); this.tone(988, 988, 0.12, 'sine', 0.05, 0.11); },
+  apOff(){ this.tone(988, 988, 0.09, 'sine', 0.045, 0); this.tone(740, 740, 0.12, 'sine', 0.045, 0.11); },
   assistBeep(){
-    this.tone(1175, 1175, 0.08, 'sine', 0.075, 0);
-    this.tone(1175, 1175, 0.08, 'sine', 0.075, 0.15);
-  },
-  chimeSweep(){
-    this.tone(520, 1560, 0.85, 'sine', 0.13, 0);
-    this.tone(780, 2080, 0.85, 'sine', 0.05, 0.06);
-    this.tone(1560, 520, 0.7, 'sine', 0.08, 0.9);
+    this.tone(1175, 1175, 0.08, 'sine', 0.035, 0);
+    this.tone(1175, 1175, 0.08, 'sine', 0.035, 0.15);
   },
   setMuted(m){
     this.muted = m;
-    if (this.master) this.master.gain.setTargetAtTime(m ? 0 : 0.85, this.ctx.currentTime, 0.03);
+    if (this.master) this.master.gain.setTargetAtTime(m ? 0 : 0.5, this.ctx.currentTime, 0.03);
   }
 };
 
 /* ============================================================
    STATE
+   Phases: ground → takeoff → air → landing → rollout → ground…
    ============================================================ */
+const FIELD_ALT = 500;
 const S = {
   started: false, time: 0,
   spool: 0, power: 0, effPower: 0,
-  throttle: 0.45, afterburner: false,
-  pitch: 0, bank: 0,            /* smoothed attitude, -1..1 */
-  inPitch: 0, inBank: 0,        /* live view-drag input */
-  viewActive: false,
-  heading: 42, altitude: 8500, speed: 0, vs: 0, dist: 0,
-  gearDown: true, gearTransit: 0,
-  lightsNight: false,
-  autopilot: false,
+  phase: 'ground',
+  throttle: 0.1, throttleCmd: 0.1, autoThrottle: false,
+  speed: 0, altitude: FIELD_ALT, vs: 0, heading: 0, dist: 0, groundDist: 0,
+  pitchDeg: 0, bankDeg: 0,
+  inPitch: 0, inBank: 0, viewActive: false,
+  rotateProg: 0,
+  gearDown: true, gearTransit: 0, gearHintT: 0, gearAutoT: -1, posRateT: -1,
+  lightsNight: false, autopilot: false, seatbelt: true,
   radioT: 0, radioFreq: '121.500',
-  rollAnim: -1, rollOffset: 0,
+  landT: 0, landDur: 20, landP: 0, landStartAlt: 0, landStartSpeed: 0, landStartThr: 0.3,
+  airportVis: true,
   assist: false, nextBeep: 0,
+  shakeT: 0, celebrateT: 0,
   sweepA: 0,
-  press: {},                    /* button id -> time last pressed */
+  press: {},
   tiltOn: false, tiltPitch: 0, tiltBank: 0
 };
 const RADIO_FREQS = ['118.700', '121.500', '124.350', '119.100', '126.825', '122.900'];
 
 /* ============================================================
-   LAYOUT — computed per resize. Landscape is the designed
-   experience; portrait gets a stacked variant of the same zones.
+   LAYOUT — landscape is the designed experience; portrait
+   stacks the same zones. Fewer, bigger, better-grouped parts.
    ============================================================ */
 let L = null;
 function computeLayout(){
@@ -375,177 +392,253 @@ function computeLayout(){
   const gap = 8;
   L = { portrait };
   if (!portrait){
-    L.panelY = Math.round(H * 0.53);
+    L.panelY = Math.round(H * 0.47);
     L.view = { x: 4, y: 4, w: W - 8, h: L.panelY - 2 };
     L.panelH = H - L.panelY;
-    const mfdW = clamp(innerW * 0.205, 96, 290);
-    const swW = clamp(innerW * 0.135, 88, 150);
-    const radarW = clamp(innerW * 0.165, 92, 230);
-    const thrW = clamp(innerW * 0.105, 76, 120);
-    const centerW = innerW - mfdW - swW - radarW - thrW - gap * 4;
+    const py = L.panelY + 8, ph = L.panelH - 16;
+    const pfdW = clamp(innerW * 0.27, 150, 300);
+    const ndW = clamp(innerW * 0.235, 130, 260);
+    const thrW = clamp(innerW * 0.115, 84, 124);
+    const midW = innerW - pfdW - ndW - thrW - gap * 3;
     let x = padL;
-    L.mfd = { x, y: L.panelY + 9, w: mfdW, h: L.panelH - 18 }; x += mfdW + gap;
-    L.sw = { x, y: L.panelY + 9, w: swW, h: L.panelH - 18 }; x += swW + gap;
-    L.center = { x, y: L.panelY, w: centerW, h: L.panelH }; x += centerW + gap;
-    L.radar = { x, y: L.panelY + 9, w: radarW, h: L.panelH - 18 }; x += radarW + gap;
-    L.throttleZone = { x, y: L.panelY + 9, w: thrW, h: L.panelH - 18 };
-    L.seps = [L.mfd.x + mfdW + gap / 2, L.sw.x + swW + gap / 2, L.center.x + centerW + gap / 2, L.radar.x + radarW + gap / 2];
-    layoutSwitches(L.sw.x, L.sw.y, swW, L.sw.h);
-    layoutGauges(L.center.x + centerW / 2, L.panelY, L.panelH, centerW);
+    L.pfd = { x, y: py, w: pfdW, h: ph }; x += pfdW + gap;
+    L.nd = { x, y: py, w: ndW, h: ph }; x += ndW + gap;
+    L.mid = { x, y: py, w: midW, h: ph }; x += midW + gap;
+    L.thr = { x, y: py, w: thrW, h: ph };
+    L.seps = [L.pfd.x + pfdW + gap / 2, L.nd.x + ndW + gap / 2, L.mid.x + midW + gap / 2];
+    layoutMid(3, 2, 46);
+    L.yokes = [
+      { x: L.pfd.x + pfdW / 2, s: 1 },
+      { x: L.nd.x + ndW / 2, s: 0.92 }
+    ];
   } else {
-    L.panelY = Math.round(H * 0.40);
+    L.panelY = Math.round(H * 0.36);
     L.view = { x: 4, y: 4, w: W - 8, h: L.panelY - 2 };
     L.panelH = H - L.panelY;
-    const ccx = W / 2;
-    layoutGauges(ccx, L.panelY, Math.min(L.panelH * 0.40, 240), innerW);
-    const swY = L.tape.y + L.tape.h + 14;
-    layoutSwitches(padL, swY, innerW, 56 + 6 + 26);
-    const y2 = L.com.y + L.com.h + 12;
-    const h2 = Math.max(H - y2 - 10 - SAFE.b, 90);
-    L.mfd = { x: padL, y: y2, w: innerW * 0.40, h: h2 };
-    L.radar = { x: padL + innerW * 0.42, y: y2, w: innerW * 0.27, h: h2 };
-    L.throttleZone = { x: padL + innerW * 0.71, y: y2, w: innerW * 0.29, h: h2 };
-    L.center = { x: 0, y: L.panelY, w: W, h: 0 };
-    L.sw = { x: padL, y: swY, w: innerW, h: 56 };
+    const py = L.panelY + 8;
+    const pfdW = Math.min(innerW * 0.78, 360);
+    const pfdH = clamp(L.panelH * 0.32, 130, 210);
+    L.pfd = { x: (W - pfdW) / 2, y: py, w: pfdW, h: pfdH };
+    const row2Y = py + pfdH + 10;
+    const row2H = clamp(L.panelH * 0.30, 120, 190);
+    const ndW = innerW * 0.44;
+    L.nd = { x: padL, y: row2Y, w: ndW, h: row2H };
+    L.mid = { x: padL + ndW + gap, y: row2Y, w: innerW - ndW - gap, h: row2H };
+    L.action = { x: padL, y: row2Y + row2H + 10, w: innerW, h: 48 };
+    const thrY = L.action.y + 58;
+    L.thr = { x: W - padR - 92, y: thrY, w: 92, h: Math.max(H - SAFE.b - 10 - thrY, 90) };
     L.seps = [];
+    layoutMid(2, 3, 0);
+    L.yokes = [{ x: W / 2 - 74, s: 1 }];
   }
-  layoutThrottle();
-  L.stick = {
-    x: L.portrait ? W / 2 : (L.center.x + L.center.w / 2),
-    baseY: H - 4 - SAFE.b,
-    len: clamp(L.panelH * (L.portrait ? 0.16 : 0.44), 46, 120)
-  };
+  layoutThr();
+  L.yokeBaseY = H - SAFE.b + 10;
   L.buttons = [
     { id: 'gear', rect: L.cells.gear },
+    { id: 'ding', rect: L.cells.ding },
     { id: 'lights', rect: L.cells.lights },
     { id: 'radio', rect: L.cells.radio },
     { id: 'ap', rect: L.cells.ap },
-    { id: 'roll', rect: { x: L.rollBtn.x - L.rollBtn.r, y: L.rollBtn.y - L.rollBtn.r, w: L.rollBtn.r * 2, h: L.rollBtn.r * 2 } }
+    { id: 'action', rect: L.action }
   ];
 }
-function layoutSwitches(x, y, w, h){
-  const comH = 26;
-  if (L.portrait){
-    const cw = (w - 18) / 4, ch = 56;
-    L.cells = {
-      gear:   { x: x, y: y, w: cw, h: ch },
-      lights: { x: x + (cw + 6), y: y, w: cw, h: ch },
-      radio:  { x: x + (cw + 6) * 2, y: y, w: cw, h: ch },
-      ap:     { x: x + (cw + 6) * 3, y: y, w: cw, h: ch }
-    };
-    L.com = { x: x, y: y + ch + 6, w: w, h: comH };
-  } else {
-    const gridH = h - comH - 8;
-    const cw = (w - 6) / 2, ch = (gridH - 6) / 2;
-    L.cells = {
-      gear:   { x: x, y: y, w: cw, h: ch },
-      lights: { x: x + cw + 6, y: y, w: cw, h: ch },
-      radio:  { x: x, y: y + ch + 6, w: cw, h: ch },
-      ap:     { x: x + cw + 6, y: y + ch + 6, w: cw, h: ch }
-    };
-    L.com = { x: x, y: y + h - comH, w: w, h: comH };
-  }
+function layoutMid(cols, rows, actH){
+  const m = L.mid;
+  L.placard = { x: m.x, y: m.y, w: m.w, h: 20 };
+  if (!L.portrait) L.action = { x: m.x, y: m.y + m.h - actH, w: m.w, h: actH };
+  const gy = m.y + 26;
+  const gh = m.h - 26 - (L.portrait ? 0 : actH + 8);
+  const cw = (m.w - (cols - 1) * 6) / cols;
+  const ch = (gh - (rows - 1) * 6) / rows;
+  const order = ['gear', 'ding', 'lights', 'radio', 'ap', 'sign'];
+  L.cells = {};
+  order.forEach((id, i) => {
+    const cx = m.x + (i % cols) * (cw + 6);
+    const cy = gy + Math.floor(i / cols) * (ch + 6);
+    L.cells[id] = { x: cx, y: cy, w: cw, h: ch };
+  });
 }
-function layoutGauges(ccx, topY, availH, availW){
-  const ahR = clamp(Math.min(availH * 0.30, availW * 0.185), 30, 104);
-  const sR = ahR * 0.74;
-  const cy = topY + ahR + 14;
-  L.gauges = { ahX: ccx, cy, ahR, sR, asX: ccx - ahR - sR - 12, alX: ccx + ahR + sR + 12 };
-  L.tape = { x: ccx - ahR * 1.25, y: cy + ahR + 8, w: ahR * 2.5, h: 20 };
-  L.vsi = { x: L.gauges.asX, y: L.tape.y + 10, r: Math.min(26, sR * 0.62) };
-  L.dataStack = { x: L.gauges.alX - 54, y: L.tape.y - 5, w: 108, h: 30 };
-  L.lamp = { x: L.gauges.alX + sR - 4, y: topY + 14 };
-}
-function layoutThrottle(){
-  const z = L.throttleZone;
-  const tcx = z.x + z.w / 2;
-  const r = Math.min(30, z.w * 0.32);
-  L.rollBtn = { x: tcx, y: z.y + r + 4, r };
-  L.thrCx = tcx;
-  L.slotTop = z.y + r * 2 + 16;
-  L.slotBot = z.y + z.h - 16;
-  if (L.slotBot - L.slotTop < 44) L.slotTop = L.slotBot - 44;
+function layoutThr(){
+  const z = L.thr;
+  L.thrCx = z.x + z.w / 2;
+  L.slotTop = z.y + 34;
+  L.slotBot = z.y + z.h - 26;
+  if (L.slotBot - L.slotTop < 40) L.slotTop = L.slotBot - 40;
 }
 
 /* ---------------- scenery data ---------------- */
-let skyStars = [], clouds = [], streaks = [], radarBlobs = [];
+let skyStars = [], clouds = [], radarBlobs = [], confetti = [];
 function buildScenery(){
   skyStars = [];
-  for (let i = 0; i < 80; i++) skyStars.push({ fx: Math.random(), fy: Math.random() * 0.55, r: rand(0.7, 1.9), p: rand(0, 6.28) });
+  for (let i = 0; i < 70; i++) skyStars.push({ fx: Math.random(), fy: Math.random() * 0.5, r: rand(0.7, 1.8), p: rand(0, 6.28) });
   radarBlobs = [];
-  for (let i = 0; i < 3; i++) radarBlobs.push({ a: rand(0, 6.28), d: rand(0.3, 0.8), s: rand(16, 30), type: 'wx', hue: i === 1 ? '255,190,60' : '80,255,140' });
+  for (let i = 0; i < 2; i++) radarBlobs.push({ a: rand(0, 6.28), d: rand(0.3, 0.75), s: rand(16, 28), type: 'wx', hue: i === 1 ? '255,190,60' : '80,255,140' });
   for (let i = 0; i < 3; i++) radarBlobs.push({ a: rand(0, 6.28), d: rand(0.25, 0.9), s: 3.5, type: 'tgt', hue: '160,255,200' });
   clouds = [];
-  for (let i = 0; i < 10; i++) clouds.push(newCloud(true));
-  streaks = [];
+  for (let i = 0; i < 7; i++) clouds.push(newCloud(true));
 }
 function newCloud(anywhere){
-  return {
-    dx: rand(-1, 1), dy: rand(-0.35, 1),
-    z: anywhere ? rand(0.1, 1) : 1,
-    s0: rand(0.7, 1.35), seed: rand(0, 100)
-  };
+  return { dx: rand(-1, 1), dy: rand(-0.3, 1), z: anywhere ? rand(0.15, 1) : 1, s0: rand(0.7, 1.3), seed: rand(0, 100) };
 }
-let cloudSprite = null;
-function makeCloudSprite(){
+let puffSprite = null, deckSprite = null;
+function makeSprites(){
+  /* soft single puff, for wisps drifting past the canopy */
   const c = document.createElement('canvas');
   c.width = 200; c.height = 124;
   const g = c.getContext('2d');
   for (let i = 0; i < 16; i++){
     const x = 100 + rand(-52, 52), y = 62 + rand(-20, 20), r = rand(18, 42);
     const gr = g.createRadialGradient(x, y, 1, x, y, r);
-    gr.addColorStop(0, 'rgba(255,255,255,0.16)');
+    gr.addColorStop(0, 'rgba(255,255,255,0.15)');
     gr.addColorStop(1, 'rgba(255,255,255,0)');
     g.fillStyle = gr;
     g.beginPath(); g.arc(x, y, r, 0, 6.29); g.fill();
   }
-  /* bright core puffs */
   for (let i = 0; i < 7; i++){
     const x = 100 + rand(-36, 36), y = 60 + rand(-13, 13), r = rand(13, 26);
     const gr = g.createRadialGradient(x, y, 1, x, y, r);
-    gr.addColorStop(0, 'rgba(255,255,255,0.5)');
+    gr.addColorStop(0, 'rgba(255,255,255,0.45)');
     gr.addColorStop(1, 'rgba(255,255,255,0)');
     g.fillStyle = gr;
     g.beginPath(); g.arc(x, y, r, 0, 6.29); g.fill();
   }
-  cloudSprite = c;
+  puffSprite = c;
+  /* wide flat cloud-top cluster, tiled to build the deck */
+  const d2 = document.createElement('canvas');
+  d2.width = 300; d2.height = 110;
+  const dg = d2.getContext('2d');
+  for (let i = 0; i < 22; i++){
+    const x = 150 + rand(-120, 120), y = 58 + rand(-22, 22), r = rand(24, 58);
+    const gr = dg.createRadialGradient(x, y, 1, x, y, r);
+    gr.addColorStop(0, 'rgba(255,255,255,0.20)');
+    gr.addColorStop(1, 'rgba(255,255,255,0)');
+    dg.fillStyle = gr;
+    dg.beginPath(); dg.arc(x, y, r, 0, 6.29); dg.fill();
+  }
+  for (let i = 0; i < 10; i++){
+    const x = 150 + rand(-95, 95), y = 54 + rand(-14, 14), r = rand(16, 34);
+    const gr = dg.createRadialGradient(x, y, 1, x, y, r);
+    gr.addColorStop(0, 'rgba(255,255,255,0.5)');
+    gr.addColorStop(1, 'rgba(255,255,255,0)');
+    dg.fillStyle = gr;
+    dg.beginPath(); dg.arc(x, y, r, 0, 6.29); dg.fill();
+  }
+  deckSprite = d2;
+}
+function spawnConfetti(){
+  const v = L.view;
+  const cols = ['#ffd94d', '#ff6b81', '#4dc3ff', '#7dff8a', '#ffffff', '#ffb52e'];
+  confetti = [];
+  for (let i = 0; i < 90; i++){
+    confetti.push({
+      x: v.x + rand(0, v.w), y: v.y - rand(0, v.h * 0.5),
+      vx: rand(-14, 14), vy: rand(35, 95),
+      w: rand(4, 8), h: rand(6, 12),
+      rot: rand(0, 6.28), vr: rand(-3.4, 3.4),
+      color: cols[i % cols.length], life: rand(2.2, 3.2)
+    });
+  }
 }
 
 /* ============================================================
-   INPUT — windshield drag steers, throttle drags, buttons tap.
-   Two pointers at once are supported (steer + throttle).
+   PHASE TRANSITIONS — the plane helps him. No fail states.
+   ============================================================ */
+function doGear(down){
+  if (S.gearDown === down || S.gearTransit > 0) return;
+  S.gearDown = down;
+  S.gearTransit = 1;
+  AudioSys.click();
+  AudioSys.clunk(0.7);
+}
+function beginTakeoff(){
+  if (S.phase !== 'ground' || S.spool < 0.85) return;
+  S.phase = 'takeoff';
+  S.rotateProg = 0;
+  S.throttleCmd = 1;
+  S.autoThrottle = true;
+  S.seatbelt = true;
+  S.airportVis = true;
+  AudioSys.click();
+}
+function liftoff(){
+  S.phase = 'air';
+  S.gearHintT = 3.2;
+  S.gearAutoT = S.time + 5;
+  S.posRateT = S.time + 0.8;
+}
+function beginLanding(){
+  if (S.phase !== 'air') return;
+  S.phase = 'landing';
+  S.landT = 0; S.landP = 0;
+  S.landStartAlt = S.altitude;
+  S.landStartSpeed = S.speed;
+  S.landStartThr = S.throttle;
+  S.landDur = clamp(16 + (S.altitude - FIELD_ALT) / 2200, 16, 30);
+  S.autopilot = true;
+  S.seatbelt = true;
+  S.airportVis = true;
+  AudioSys.ding();
+  if (!S.gearDown && S.gearTransit === 0) doGear(true);
+}
+function touchdown(){
+  S.phase = 'rollout';
+  S.altitude = FIELD_ALT;
+  S.vs = 0;
+  S.shakeT = 0.55;
+  AudioSys.clunk(0.9);
+  AudioSys.noiseBurst(0.5, 200, 0.12, 0, 'lowpass');
+}
+function arrive(){
+  S.phase = 'ground';
+  S.throttleCmd = 0.1;
+  S.autoThrottle = true;
+  S.autopilot = false;
+  S.celebrateT = 3;
+  AudioSys.celebrate();
+  spawnConfetti();
+}
+
+/* ============================================================
+   INPUT — windshield drag steers (air only), thrust drags,
+   buttons tap. Two pointers at once are supported.
    ============================================================ */
 const pointers = new Map();
 function setThrottleFromY(y){
-  const wasAB = S.afterburner;
+  if (S.phase === 'landing' || S.phase === 'rollout') return;
   S.throttle = clamp(1 - (y - L.slotTop) / (L.slotBot - L.slotTop), 0, 1);
-  S.afterburner = S.throttle > 0.955;
-  if (S.afterburner && !wasAB) AudioSys.detent();
+  S.throttleCmd = S.throttle;
+  if (S.phase === 'takeoff') S.autoThrottle = false;
+  if (S.phase === 'ground' && S.started && S.spool > 0.85 && S.throttle > 0.6) beginTakeoff();
 }
 function pressButton(id){
   S.press[id] = S.time;
   if (id === 'gear'){
-    if (S.gearTransit > 0) return;
-    S.gearDown = !S.gearDown;
-    S.gearTransit = 1;
-    AudioSys.click();
-    AudioSys.clunk(0.8);
+    if (S.phase === 'air' || S.phase === 'landing'){
+      S.gearAutoT = -1; S.gearHintT = 0;
+      doGear(!S.gearDown);
+    } else {
+      AudioSys.click();
+    }
+  } else if (id === 'ding'){
+    S.seatbelt = !S.seatbelt;
+    AudioSys.ding();
   } else if (id === 'lights'){
     S.lightsNight = !S.lightsNight;
     AudioSys.click();
   } else if (id === 'radio'){
-    S.radioT = 2.3;
+    S.radioT = 1.6;
     S.radioFreq = RADIO_FREQS[Math.floor(Math.random() * RADIO_FREQS.length)];
     AudioSys.radioChatter();
   } else if (id === 'ap'){
-    S.autopilot = !S.autopilot;
-    if (S.autopilot) AudioSys.apOn(); else AudioSys.apOff();
-  } else if (id === 'roll'){
-    if (S.rollAnim < 0 && S.spool > 0.7){
-      S.rollAnim = 0;
+    if (S.phase === 'air'){
+      S.autopilot = !S.autopilot;
+      if (S.autopilot) AudioSys.apOn(); else AudioSys.apOff();
+    } else {
       AudioSys.click();
-      AudioSys.chimeSweep();
     }
+  } else if (id === 'action'){
+    if (S.phase === 'ground') beginTakeoff();
+    else if (S.phase === 'air') beginLanding();
   }
 }
 canvas.addEventListener('pointerdown', e => {
@@ -554,8 +647,8 @@ canvas.addEventListener('pointerdown', e => {
   for (const b of L.buttons){
     if (inRect(x, y, b.rect)){ pressButton(b.id); pointers.set(e.pointerId, { type: 'btn' }); return; }
   }
-  if (inRect(x, y, L.throttleZone)){ pointers.set(e.pointerId, { type: 'throttle' }); setThrottleFromY(y); return; }
-  if (inRect(x, y, L.view)){
+  if (inRect(x, y, L.thr)){ pointers.set(e.pointerId, { type: 'throttle' }); setThrottleFromY(y); return; }
+  if (inRect(x, y, L.view) && S.phase === 'air'){
     pointers.set(e.pointerId, { type: 'view', sx: x, sy: y });
     S.viewActive = true;
     if (S.autopilot){ S.autopilot = false; AudioSys.apOff(); }
@@ -566,8 +659,8 @@ window.addEventListener('pointermove', e => {
   if (!p) return;
   if (p.type === 'throttle') setThrottleFromY(e.clientY);
   else if (p.type === 'view'){
-    S.inBank = clamp((e.clientX - p.sx) / 120, -1, 1);
-    S.inPitch = clamp(-(e.clientY - p.sy) / 105, -1, 1);
+    S.inBank = clamp((e.clientX - p.sx) / 130, -1, 1);
+    S.inPitch = clamp(-(e.clientY - p.sy) / 115, -1, 1);
   }
 }, { passive: true });
 function endPointer(e){
@@ -631,54 +724,61 @@ tiltBtn.addEventListener('click', e => {
 });
 
 /* ============================================================
-   DRAWING — THE WORLD OUT THE WINDSHIELD
+   THE WORLD OUT THE WINDSHIELD
+   Cruise: sky, sun, one horizon, a sea of cloud tops.
+   Low: soft fields fade in. Airport phases: a simple,
+   friendly runway in honest perspective.
    ============================================================ */
+function groundVisAmt(){
+  if (S.phase === 'ground' || S.phase === 'takeoff' || S.phase === 'rollout') return 1;
+  if (S.phase === 'landing') return clamp(0.3 + 0.7 * S.landP, 0, 1);
+  return clamp(1 - (S.altitude - FIELD_ALT) / 2400, 0, 1);
+}
 function drawWorld(){
   const v = L.view;
   const cx = v.x + v.w / 2, cy = v.y + v.h / 2;
-  const altT = clamp((S.altitude - 800) / 40000, 0, 1);
-  const rollTotal = rad(S.bank * 38) + S.rollOffset;
+  const altT = clamp((S.altitude - FIELD_ALT) / 36000, 0, 1);
+  const gv = groundVisAmt();
+  const rollTotal = rad(S.bankDeg);
 
   ctx.save();
   roundRectPath(ctx, v.x, v.y, v.w, v.h, 16);
   ctx.clip();
 
-  /* afterburner FOV push + shake */
-  const fov = 1 + (S.afterburner ? 0.055 : 0) + (S.speed / 850) * 0.02;
-  const shx = S.afterburner ? rand(-1.6, 1.6) : 0;
-  const shy = S.afterburner ? rand(-1.6, 1.6) : 0;
-  ctx.translate(cx + shx, cy + shy);
-  ctx.scale(fov, fov);
-  ctx.translate(-cx, -cy);
+  /* touchdown bump */
+  if (S.shakeT > 0){
+    const s = S.shakeT * 7;
+    ctx.translate(rand(-s, s), rand(-s, s) * 0.7);
+  }
 
-  /* sky — deepens toward space blue with altitude */
-  const top = lerpColor([56, 130, 226], [5, 11, 50], Math.pow(altT, 0.8));
-  const mid = lerpColor([124, 184, 240], [28, 50, 108], Math.pow(altT, 0.9));
-  const low = lerpColor([199, 228, 250], [92, 112, 162], altT);
+  /* sky — rich gradient, deepening toward the top of the climb */
+  const top = lerpColor([52, 124, 218], [7, 16, 58], Math.pow(altT, 0.75));
+  const mid = lerpColor([120, 182, 238], [30, 56, 116], Math.pow(altT, 0.85));
+  const low = lerpColor([203, 230, 250], [98, 120, 170], altT);
   const g = ctx.createLinearGradient(0, v.y, 0, v.y + v.h);
-  g.addColorStop(0, css(top)); g.addColorStop(0.6, css(mid)); g.addColorStop(1, css(low));
+  g.addColorStop(0, css(top)); g.addColorStop(0.62, css(mid)); g.addColorStop(1, css(low));
   ctx.fillStyle = g;
-  ctx.fillRect(v.x - 6, v.y - 6, v.w + 12, v.h + 12);
+  ctx.fillRect(v.x - 8, v.y - 8, v.w + 16, v.h + 16);
 
-  /* faint stars up high */
-  if (altT > 0.38){
+  /* faint stars at the very top of the sky */
+  if (altT > 0.45){
     ctx.save();
     ctx.fillStyle = '#e6eeff';
     for (const st of skyStars){
       const tw = 0.5 + 0.5 * Math.sin(S.time * 2 + st.p);
-      ctx.globalAlpha = (altT - 0.38) * 1.5 * tw;
+      ctx.globalAlpha = (altT - 0.45) * 1.6 * tw;
       ctx.beginPath(); ctx.arc(v.x + st.fx * v.w, v.y + st.fy * v.h, st.r, 0, 6.29); ctx.fill();
     }
     ctx.restore();
   }
 
-  /* sun with glare, drifting gently as the heading changes */
-  const sunX = cx + v.w * 0.20 + Math.sin(rad(S.heading) * 0.7) * v.w * 0.15;
+  /* sun with a soft glow, drifting gently with heading */
+  const sunX = cx + v.w * 0.21 + Math.sin(rad(S.heading) * 0.7) * v.w * 0.13;
   const sunY = v.y + v.h * 0.24 - altT * v.h * 0.05;
   ctx.save();
   const glow = ctx.createRadialGradient(sunX, sunY, 4, sunX, sunY, v.h * 0.42);
-  glow.addColorStop(0, 'rgba(255,244,190,0.95)');
-  glow.addColorStop(0.18, 'rgba(255,230,150,0.45)');
+  glow.addColorStop(0, 'rgba(255,244,190,0.9)');
+  glow.addColorStop(0.18, 'rgba(255,230,150,0.4)');
   glow.addColorStop(1, 'rgba(255,230,150,0)');
   ctx.fillStyle = glow;
   ctx.fillRect(sunX - v.h * 0.42, sunY - v.h * 0.42, v.h * 0.84, v.h * 0.84);
@@ -686,111 +786,51 @@ function drawWorld(){
   ctx.beginPath(); ctx.arc(sunX, sunY, v.h * 0.045, 0, 6.29); ctx.fill();
   ctx.restore();
 
-  /* ---- the horizon world: pitches and rolls with the jet ---- */
+  /* ---- everything below the horizon pitches and rolls ---- */
   ctx.save();
-  ctx.translate(cx, cy);
+  ctx.translate(cx, cy + S.pitchDeg * v.h * 0.030);
   ctx.rotate(-rollTotal);
-  ctx.translate(0, S.pitch * v.h * 0.34);
-  const BW = v.w * 1.9, BH = v.h * 2.8;
+  const BW = v.w * 1.7, BH = v.h * 2.4;
 
-  /* sea base */
-  ctx.fillStyle = css(lerpColor([54, 112, 170], [40, 86, 142], altT));
-  ctx.fillRect(-BW, 0, BW * 2, BH);
-
-  /* coastline: land mass with a wavy shore that swings as you turn */
-  const coastBase = Math.sin(rad(S.heading) * 2.0) * v.w * 0.22;
-  const coastAt = yy => coastBase + Math.sin(yy * 0.004 + 1.7) * 48 + Math.sin(yy * 0.013 + 0.4) * 18;
-  const landPath = () => {
-    ctx.beginPath();
-    ctx.moveTo(coastAt(-80), -80);
-    for (let yy = -40; yy <= BH; yy += 40) ctx.lineTo(coastAt(yy), yy);
-    ctx.lineTo(BW, BH); ctx.lineTo(BW, -80);
-    ctx.closePath();
-  };
-  landPath();
-  ctx.fillStyle = '#699c4e';
-  ctx.fill();
-
-  /* patchwork fields, clipped to the land, scrolling with flight */
-  ctx.save();
-  landPath(); ctx.clip();
-  const altScale = clamp(9500 / Math.max(S.altitude, 900), 0.55, 2.4);
-  const cellW = 180 * altScale, cellH = 118 * altScale;
-  const offX = (S.dist * 0.4) % cellW, offY = S.dist % cellH;
-  const rowBase = Math.floor(S.dist / cellH);
-  const fieldCols = ['#7cab52', '#93b95e', '#c9b06a', '#a9c063', '#5f9448', '#d3c07e', '#86ac55'];
-  const rows = Math.ceil(BH / cellH) + 2, cols = Math.ceil(BW * 2 / cellW) + 2;
-  for (let j = -1; j < rows; j++){
-    for (let i = -2; i < cols; i++){
-      ctx.fillStyle = fieldCols[Math.floor(hash2(i, j + rowBase) * fieldCols.length)];
-      ctx.fillRect(-BW + i * cellW - offX, j * cellH - offY, cellW - 2, cellH - 2);
-    }
+  if (gv > 0.01){
+    ctx.save();
+    ctx.globalAlpha = gv;
+    drawGroundLayer(v, BW, BH);
+    ctx.restore();
   }
-  /* a river wandering through the fields */
-  ctx.strokeStyle = 'rgba(70,130,190,0.85)';
-  ctx.lineWidth = 9 * altScale; ctx.lineCap = 'round';
-  ctx.beginPath();
-  for (let yy = -20; yy <= BH; yy += 34){
-    const rx = coastBase + 190 + Math.sin(yy * 0.006 + 3.1) * 90 - (S.dist * 0.4 % 34) * 0;
-    if (yy === -20) ctx.moveTo(rx, yy); else ctx.lineTo(rx, yy + (S.dist % 34));
+  if (gv < 0.99){
+    ctx.save();
+    ctx.globalAlpha = 1 - gv;
+    drawCloudDeck(v, BW, BH, altT);
+    ctx.restore();
   }
-  ctx.stroke();
-  ctx.restore();
-
-  /* distant mountain ridge along the horizon */
-  ctx.save();
-  ctx.fillStyle = 'rgba(74,96,128,0.55)';
-  ctx.beginPath();
-  ctx.moveTo(-BW, 2);
-  const mOff = (S.heading * 3) % 160;
-  for (let mx = -BW - 160; mx <= BW; mx += 80){
-    const peak = 8 + hash2(Math.floor((mx + mOff) / 80), 7) * 26;
-    ctx.lineTo(mx + mOff + 40, -peak);
-    ctx.lineTo(mx + mOff + 80, 2);
-  }
-  ctx.lineTo(BW, 2);
-  ctx.closePath(); ctx.fill();
-  ctx.restore();
-
-  /* haze band hugging the horizon line */
-  const hz = ctx.createLinearGradient(0, -30, 0, 36);
-  hz.addColorStop(0, 'rgba(235,244,255,0)');
-  hz.addColorStop(0.45, 'rgba(235,244,255,0.5)');
-  hz.addColorStop(1, 'rgba(235,244,255,0)');
-  ctx.fillStyle = hz;
-  ctx.fillRect(-BW, -30, BW * 2, 66);
-  /* the horizon line itself */
-  ctx.fillStyle = 'rgba(255,255,255,0.65)';
-  ctx.fillRect(-BW, -1, BW * 2, 2);
-
   ctx.restore(); /* end horizon world */
 
-  /* clouds streaming past (pseudo-3D) */
-  if (cloudSprite){
+  /* a few slow puffs drifting past the canopy in flight */
+  if (S.phase === 'air' && puffSprite){
     for (const c of clouds){
       const k = 1 - c.z;
       const px = cx + c.dx * k * v.w * 0.78;
-      const py = cy + c.dy * k * v.h * 0.95 + S.pitch * v.h * 0.14 * k;
-      const size = (26 + k * k * 360) * c.s0;
+      const py = cy + c.dy * k * v.h * 0.9 + S.pitchDeg * 2.4 * k;
+      const size = (30 + k * k * 330) * c.s0;
       ctx.save();
-      ctx.globalAlpha = Math.sin(Math.min(k * 1.2, 1) * Math.PI) * 0.95;
-      ctx.drawImage(cloudSprite, px - size / 2, py - size * 0.31, size, size * 0.62);
+      ctx.globalAlpha = Math.sin(Math.min(k * 1.25, 1) * Math.PI) * 0.5;
+      ctx.drawImage(puffSprite, px - size / 2, py - size * 0.31, size, size * 0.62);
       ctx.restore();
     }
   }
 
-  /* speed streaks whipping past the canopy edges */
-  if (streaks.length){
+  /* landing celebration, seen through the windshield */
+  if (confetti.length){
     ctx.save();
-    ctx.strokeStyle = 'rgba(255,255,255,0.55)';
-    ctx.lineCap = 'round';
-    for (const s of streaks){
-      ctx.globalAlpha = clamp(s.life, 0, 1) * 0.55;
-      ctx.lineWidth = s.w;
-      ctx.beginPath();
-      ctx.moveTo(s.x, s.y);
-      ctx.lineTo(s.x - s.vx * 0.06, s.y);
-      ctx.stroke();
+    for (const p of confetti){
+      ctx.save();
+      ctx.translate(p.x, p.y);
+      ctx.rotate(p.rot);
+      ctx.globalAlpha = clamp(p.life / 1.2, 0, 1);
+      ctx.fillStyle = p.color;
+      ctx.fillRect(-p.w / 2, -p.h / 2, p.w, p.h);
+      ctx.restore();
     }
     ctx.restore();
   }
@@ -802,60 +842,284 @@ function drawWorld(){
   }
   ctx.restore(); /* unclip view */
 
-  /* glass reflection */
+  /* faint glass reflection */
   ctx.save();
   roundRectPath(ctx, v.x, v.y, v.w, v.h, 16);
   ctx.clip();
   const rg = ctx.createLinearGradient(v.x, v.y, v.x + v.w, v.y + v.h);
-  rg.addColorStop(0, 'rgba(255,255,255,0.07)');
+  rg.addColorStop(0, 'rgba(255,255,255,0.06)');
   rg.addColorStop(0.35, 'rgba(255,255,255,0)');
-  rg.addColorStop(0.75, 'rgba(255,255,255,0)');
-  rg.addColorStop(1, 'rgba(255,255,255,0.045)');
+  rg.addColorStop(0.78, 'rgba(255,255,255,0)');
+  rg.addColorStop(1, 'rgba(255,255,255,0.04)');
   ctx.fillStyle = rg;
   ctx.fillRect(v.x, v.y, v.w, v.h);
-  if (S.afterburner){
-    const og = ctx.createRadialGradient(cx, cy, v.h * 0.3, cx, cy, v.w * 0.62);
-    og.addColorStop(0, 'rgba(255,120,20,0)');
-    og.addColorStop(1, 'rgba(255,110,20,0.28)');
-    ctx.fillStyle = og;
-    ctx.fillRect(v.x, v.y, v.w, v.h);
-  }
-  ctx.restore();
-
-  /* HUD flight-path marker, fixed to the glass */
-  ctx.save();
-  ctx.strokeStyle = 'rgba(110,255,170,0.8)';
-  ctx.lineWidth = 2;
-  ctx.beginPath(); ctx.arc(cx, cy, 12, 0, 6.29); ctx.stroke();
-  ctx.beginPath();
-  ctx.moveTo(cx - 30, cy); ctx.lineTo(cx - 14, cy); ctx.lineTo(cx - 8, cy + 5);
-  ctx.moveTo(cx + 30, cy); ctx.lineTo(cx + 14, cy); ctx.lineTo(cx + 8, cy + 5);
-  ctx.stroke();
-  ctx.fillStyle = 'rgba(110,255,170,0.9)';
-  ctx.beginPath(); ctx.arc(cx, cy, 2, 0, 6.29); ctx.fill();
   ctx.restore();
 
   drawWindshieldFrame(v);
 }
+
+/* soft ground: quiet fields and a coastline, low contrast */
+function drawGroundLayer(v, BW, BH){
+  const agl = S.altitude - FIELD_ALT;
+  ctx.fillStyle = '#6da354';
+  ctx.fillRect(-BW, 0, BW * 2, BH);
+  if (S.airportVis){
+    drawAirport(v, BW, BH);
+  } else {
+  /* patchwork, but soft and simple — big shapes, low contrast */
+  const altScale = clamp(9500 / Math.max(S.altitude, 900), 0.55, 2.4);
+  const cellW = 300 * altScale, cellH = 200 * altScale;
+  const offX = (S.dist * 0.4) % cellW, offY = S.groundDist % cellH;
+  const rowBase = Math.floor(S.groundDist / cellH);
+  const fieldCols = ['#79a857', '#86b364', '#bfae72', '#94ba68', '#6f9c50', '#c2b47e'];
+  const rows = Math.ceil(BH / cellH) + 2, cols = Math.ceil(BW * 2 / cellW) + 2;
+  for (let j = -1; j < rows; j++){
+    for (let i = -2; i < cols; i++){
+      ctx.fillStyle = fieldCols[Math.floor(hash2(i, j + rowBase) * fieldCols.length)];
+      ctx.fillRect(-BW + i * cellW - offX, j * cellH - offY, cellW - 3, cellH - 3);
+    }
+  }
+  /* coastline: calm sea along the left */
+  const coastBase = -BW * 0.42 + Math.sin(rad(S.heading) * 2.0) * v.w * 0.2;
+  ctx.fillStyle = 'rgba(58,110,168,0.9)';
+  ctx.beginPath();
+  ctx.moveTo(-BW, -4);
+  for (let yy = -4; yy <= BH; yy += 42){
+    ctx.lineTo(coastBase + Math.sin(yy * 0.004 + 1.7) * 46 + Math.sin(yy * 0.013 + 0.4) * 17, yy);
+  }
+  ctx.lineTo(-BW, BH);
+  ctx.closePath(); ctx.fill();
+  }
+  /* horizon haze */
+  const hz = ctx.createLinearGradient(0, -26, 0, 34);
+  hz.addColorStop(0, 'rgba(235,244,255,0)');
+  hz.addColorStop(0.45, 'rgba(235,244,255,0.45)');
+  hz.addColorStop(1, 'rgba(235,244,255,0)');
+  ctx.fillStyle = hz;
+  ctx.fillRect(-BW, -26, BW * 2, 60);
+  if (agl < 60) return;
+  ctx.fillStyle = 'rgba(255,255,255,0.5)';
+  ctx.fillRect(-BW, -1, BW * 2, 2);
+}
+
+/* the friendly little airport, in perspective */
+function drawAirport(v, BW, BH){
+  const vw = v.w;
+  let yFar, wFar, wNear, alpha = 1;
+  if (S.phase === 'landing'){
+    const e = easeInOut(S.landP);
+    yFar = lerp(v.h * 0.30, 3, e);
+    wFar = lerp(3, 15, e);
+    wNear = lerp(vw * 0.07, vw * 0.44, e);
+  } else if (S.phase === 'air'){
+    const s = clamp(1 - (S.altitude - FIELD_ALT) / 2300, 0, 1);
+    yFar = 3 + (1 - s) * 46;
+    wFar = 2 + 13 * s;
+    wNear = vw * 0.44 * s;
+    alpha = s;
+  } else {
+    yFar = 3; wFar = 15; wNear = vw * 0.44;
+  }
+  const yNear = BH;
+  const persp = u => Math.pow(u, 2.6);
+  const yAt = u => yFar + (yNear - yFar) * persp(u);
+  const wAt = u => wFar + (wNear - wFar) * persp(u);
+
+  ctx.save();
+  ctx.globalAlpha *= alpha;
+  /* grass detail: a few soft darker patches scrolling by */
+  ctx.fillStyle = 'rgba(70,120,55,0.35)';
+  for (let i = 0; i < 5; i++){
+    const uu = 0.22 + ((i * 0.19 + (S.groundDist * 0.0011)) % 0.75);
+    const yy = yAt(uu), ww = wAt(uu);
+    ctx.beginPath();
+    ctx.ellipse((i % 2 ? 1 : -1) * (ww * 0.85 + 60), yy, 60 + persp(uu) * 130, 10 + persp(uu) * 26, 0, 0, 6.29);
+    ctx.fill();
+  }
+  /* runway surface */
+  ctx.beginPath();
+  ctx.moveTo(-wFar / 2, yFar);
+  ctx.lineTo(wFar / 2, yFar);
+  ctx.lineTo(wNear / 2, yNear);
+  ctx.lineTo(-wNear / 2, yNear);
+  ctx.closePath();
+  const rwg = ctx.createLinearGradient(0, yFar, 0, yNear);
+  rwg.addColorStop(0, '#43464d'); rwg.addColorStop(1, '#33363c');
+  ctx.fillStyle = rwg;
+  ctx.fill();
+  /* edge lines */
+  ctx.strokeStyle = 'rgba(255,255,255,0.75)';
+  ctx.lineWidth = 1.6;
+  ctx.beginPath();
+  ctx.moveTo(-wFar / 2, yFar); ctx.lineTo(-wNear / 2, yNear);
+  ctx.moveTo(wFar / 2, yFar); ctx.lineTo(wNear / 2, yNear);
+  ctx.stroke();
+  /* threshold piano keys */
+  ctx.fillStyle = 'rgba(255,255,255,0.85)';
+  for (let i = 0; i < 6; i++){
+    const fx = -0.38 + i * 0.152;
+    const u0 = 0.015, u1 = 0.085;
+    ctx.beginPath();
+    ctx.moveTo(fx * wAt(u0), yAt(u0));
+    ctx.lineTo((fx + 0.075) * wAt(u0), yAt(u0));
+    ctx.lineTo((fx + 0.075) * wAt(u1), yAt(u1));
+    ctx.lineTo(fx * wAt(u1), yAt(u1));
+    ctx.closePath(); ctx.fill();
+  }
+  /* centerline dashes streaming past */
+  ctx.fillStyle = 'rgba(255,255,255,0.92)';
+  const N = 13;
+  const phaseU = (S.groundDist * 0.0035) % (1 / N);
+  for (let i = -1; i < N; i++){
+    const u0 = i / N + phaseU;
+    if (u0 < 0.06 || u0 > 1) continue;
+    const u1 = u0 + 0.42 / N;
+    const dw = Math.max(1.2, wAt(u0) * 0.035);
+    ctx.beginPath();
+    ctx.moveTo(-dw / 2, yAt(u0));
+    ctx.lineTo(dw / 2, yAt(u0));
+    ctx.lineTo(Math.max(1.2, wAt(u1) * 0.035) / 2, yAt(u1));
+    ctx.lineTo(-Math.max(1.2, wAt(u1) * 0.035) / 2, yAt(u1));
+    ctx.closePath(); ctx.fill();
+  }
+  /* edge lights */
+  for (let i = 0; i <= 15; i++){
+    const u = 0.03 + (i / 15) * 0.97;
+    const yy = yAt(u), ww = wAt(u), f = persp(u);
+    const r = 0.8 + f * 2.4;
+    ctx.save();
+    ctx.fillStyle = '#ffe9b0';
+    ctx.shadowColor = 'rgba(255,220,140,0.9)'; ctx.shadowBlur = 5;
+    ctx.beginPath(); ctx.arc(-ww * 0.58, yy, r, 0, 6.29); ctx.fill();
+    ctx.beginPath(); ctx.arc(ww * 0.58, yy, r, 0, 6.29); ctx.fill();
+    ctx.restore();
+  }
+  /* PAPI lights on final: two white, two red — right on glidepath */
+  if (S.phase === 'landing' && S.landP > 0.2){
+    const u = 0.1, yy = yAt(u), ww = wAt(u);
+    const cols = ['#ffffff', '#ffffff', '#ff5148', '#ff5148'];
+    for (let i = 0; i < 4; i++){
+      ctx.save();
+      ctx.fillStyle = cols[i];
+      ctx.shadowColor = cols[i]; ctx.shadowBlur = 7;
+      ctx.fillRect(-ww * 0.62 - 26 + i * 8, yy - 2.5, 5.5, 5);
+      ctx.restore();
+    }
+  }
+  drawAirportBuildings(yAt, wAt, persp);
+  ctx.restore();
+}
+function drawAirportBuildings(yAt, wAt, persp){
+  /* two building groups per side; they slide past as the jet rolls */
+  const rolling = S.phase === 'ground' || S.phase === 'takeoff' || S.phase === 'rollout';
+  for (const side of [-1, 1]){
+    for (let gi = 0; gi < 2; gi++){
+      let u;
+      if (S.phase === 'landing') u = gi === 0 ? 0.30 : 0.62;
+      else if (rolling) u = ((gi * 0.5 + (side > 0 ? 0.13 : 0.31) + S.groundDist * 0.0011) % 1);
+      else u = gi === 0 ? 0.30 : 0.62;
+      if (u < 0.05 || u > 0.97) continue;
+      const yy = yAt(u), ww = wAt(u), f = persp(u);
+      const bx = side * (ww * 0.72 + 26 + f * 120);
+      const s = 0.3 + f * 2.2;
+      ctx.save();
+      ctx.translate(bx, yy);
+      ctx.scale(s, s);
+      if (side > 0){
+        /* terminal + control tower */
+        ctx.fillStyle = '#9aa4ae';
+        ctx.fillRect(-52, -20, 104, 20);
+        ctx.fillStyle = '#7e8894';
+        ctx.fillRect(-52, -20, 104, 5);
+        ctx.fillStyle = '#5d7d99';
+        for (let wi = 0; wi < 5; wi++) ctx.fillRect(-44 + wi * 19, -13, 12, 6);
+        ctx.fillStyle = '#8b95a1';
+        ctx.fillRect(30, -46, 7, 26);
+        ctx.fillStyle = '#54687c';
+        ctx.fillRect(25, -54, 17, 9);
+        ctx.fillStyle = '#a8e6ff';
+        ctx.fillRect(27, -52, 13, 5);
+      } else {
+        /* parked planes */
+        for (let pi = 0; pi < 2; pi++){
+          const px = -30 + pi * 58, py = -4 - pi * 7;
+          ctx.fillStyle = '#e8ecf1';
+          ctx.beginPath(); ctx.ellipse(px, py, 21, 5.5, 0, 0, 6.29); ctx.fill();
+          ctx.fillStyle = '#d5dbe3';
+          ctx.beginPath();
+          ctx.moveTo(px - 17, py - 2); ctx.lineTo(px - 24, py - 13); ctx.lineTo(px - 18, py - 13); ctx.lineTo(px - 12, py - 3);
+          ctx.closePath(); ctx.fill();
+          ctx.fillStyle = '#3f7fbf';
+          ctx.fillRect(px - 20, py - 12.5, 4.5, 4.5);
+          ctx.fillStyle = '#7fb2e0';
+          for (let wi = 0; wi < 4; wi++) ctx.fillRect(px - 6 + wi * 6, py - 2.5, 3, 2.4);
+        }
+      }
+      ctx.restore();
+    }
+  }
+}
+
+/* the cruise cloud deck: layered soft cloud tops to the horizon */
+function drawCloudDeck(v, BW, BH, altT){
+  const dg = ctx.createLinearGradient(0, -4, 0, BH * 0.75);
+  dg.addColorStop(0, '#eef4fb');
+  dg.addColorStop(0.35, '#dbe7f4');
+  dg.addColorStop(1, css(lerpColor([178, 198, 226], [130, 148, 196], altT)));
+  ctx.fillStyle = dg;
+  ctx.fillRect(-BW, 0, BW * 2, BH);
+  /* drifting shadow patches give the deck its soft volume */
+  ctx.fillStyle = 'rgba(110,135,180,0.13)';
+  for (let i = 0; i < 4; i++){
+    const sx = ((i * 0.37 + 0.13 + S.dist * 0.00035) % 1.3 - 0.65) * BW * 2;
+    const sy = 40 + i * 52 + Math.sin(i * 3.1) * 12;
+    ctx.beginPath(); ctx.ellipse(sx, sy, 120 + i * 40, 16 + i * 5, 0, 0, 6.29); ctx.fill();
+  }
+  /* puff rows: small and dense at the horizon, big and soft below */
+  if (deckSprite){
+    for (let r = 0; r < 6; r++){
+      const yy = 3 + r * r * 6.2;
+      const sc = 0.34 + r * 0.30;
+      const dw = 300 * sc, dh = 110 * sc;
+      const spacing = dw * 0.82;
+      const scroll = (S.dist * (0.010 + r * 0.006) + r * 131) % spacing;
+      ctx.save();
+      ctx.globalAlpha *= 0.5 + r * 0.09;
+      for (let x = -BW - spacing; x < BW + spacing; x += spacing){
+        ctx.drawImage(deckSprite, x + scroll - dw / 2, yy - dh * 0.4, dw, dh);
+      }
+      ctx.restore();
+    }
+  }
+  /* haze hugging the horizon, and the line itself */
+  const hz = ctx.createLinearGradient(0, -30, 0, 30);
+  hz.addColorStop(0, 'rgba(240,247,255,0)');
+  hz.addColorStop(0.5, 'rgba(240,247,255,0.55)');
+  hz.addColorStop(1, 'rgba(240,247,255,0)');
+  ctx.fillStyle = hz;
+  ctx.fillRect(-BW, -30, BW * 2, 60);
+  ctx.fillStyle = 'rgba(255,255,255,0.55)';
+  ctx.fillRect(-BW, -1, BW * 2, 2);
+}
+
+/* airliner window frames: two front panes, center posts, side panes */
 function drawWindshieldFrame(v){
-  /* A-pillars */
   ctx.save();
   ctx.fillStyle = '#14161a';
-  ctx.save();
-  ctx.translate(v.x + 4, v.y + v.h * 0.06);
-  ctx.rotate(0.30);
-  ctx.fillRect(-10, -30, 20, v.h * 0.52);
-  ctx.fillStyle = 'rgba(255,255,255,0.10)';
-  ctx.fillRect(7, -30, 3, v.h * 0.52);
-  ctx.restore();
-  ctx.fillStyle = '#14161a';
-  ctx.save();
-  ctx.translate(v.x + v.w - 4, v.y + v.h * 0.06);
-  ctx.rotate(-0.30);
-  ctx.fillRect(-10, -30, 20, v.h * 0.52);
-  ctx.fillStyle = 'rgba(255,255,255,0.10)';
-  ctx.fillRect(-10, -30, 3, v.h * 0.52);
-  ctx.restore();
+  const post = (x0, y0, ang, len, wdt) => {
+    ctx.save();
+    ctx.translate(x0, y0);
+    ctx.rotate(ang);
+    ctx.fillRect(-wdt / 2, -26, wdt, len);
+    ctx.fillStyle = 'rgba(255,255,255,0.09)';
+    ctx.fillRect(wdt / 2 - 3, -26, 3, len);
+    ctx.restore();
+    ctx.fillStyle = '#14161a';
+  };
+  /* A-pillars at the outer edges only — the central field of view
+     stays completely clear, one wide pane of glass */
+  post(v.x + 5, v.y + v.h * 0.05, 0.20, v.h * 0.98, 15);
+  post(v.x + v.w - 5, v.y + v.h * 0.05, -0.20, v.h * 0.98, 15);
   /* frame border */
   ctx.strokeStyle = '#0e1013';
   ctx.lineWidth = 9;
@@ -882,7 +1146,9 @@ function drawWindshieldFrame(v){
 }
 
 /* ============================================================
-   DRAWING — THE COCKPIT PANEL
+   THE FLIGHT DECK PANEL — fewer, bigger, grouped elements.
+   PFD · ND · placard + working buttons + TAKE OFF/LAND ·
+   twin thrust levers · two yokes.
    ============================================================ */
 function drawScrew(x, y){
   ctx.save();
@@ -916,7 +1182,7 @@ function drawLED(x, y, r, color, on){
   }
   ctx.restore();
 }
-function screenFrame(rect, label){
+function dispFrame(rect){
   ctx.save();
   const bg = ctx.createLinearGradient(0, rect.y, 0, rect.y + rect.h);
   bg.addColorStop(0, '#101216'); bg.addColorStop(1, '#08090b');
@@ -938,7 +1204,7 @@ function screenFrame(rect, label){
   ctx.translate(inner.x, inner.y);
   return inner;
 }
-function screenGlass(inner){
+function dispGlass(inner){
   ctx.restore(); /* unclip */
   const gl = ctx.createLinearGradient(inner.x, inner.y, inner.x + inner.w, inner.y + inner.h);
   gl.addColorStop(0, 'rgba(255,255,255,' + (S.lightsNight ? 0.03 : 0.07) + ')');
@@ -947,385 +1213,243 @@ function screenGlass(inner){
   ctx.fillStyle = gl;
   roundRectPath(ctx, inner.x, inner.y, inner.w, inner.h, 6);
   ctx.fill();
-  ctx.restore(); /* matches screenFrame save */
+  ctx.restore(); /* matches dispFrame save */
 }
-function screenLabel(text, x, y, color){
+function dispLabel(text, x, y, color){
   ctx.fillStyle = color || '#8fd8c0';
   ctx.font = '600 10px "Barlow Condensed", sans-serif';
   ctx.textAlign = 'left'; ctx.textBaseline = 'top';
   ctx.fillText(text, x, y);
 }
 
-/* ---------------- left MFD: moving map ---------------- */
-function drawMap(){
-  const inner = screenFrame(L.mfd, 'MAP');
+/* ---------------- PFD: attitude + speed/altitude tapes ---------------- */
+function drawTape(x, w, h, value, pxPer, step, labelStep, fmt, boxFmt){
+  const cy = h / 2;
+  ctx.save();
+  ctx.fillStyle = 'rgba(6,12,20,0.88)';
+  ctx.fillRect(x, 0, w, h);
+  ctx.beginPath(); ctx.rect(x, 0, w, h); ctx.clip();
+  ctx.font = '600 9px "Barlow Condensed", sans-serif';
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  const range = cy / pxPer + step * 2;
+  const v0 = Math.floor((value - range) / step) * step;
+  for (let val = v0; val <= value + range; val += step){
+    if (val < 0) continue;
+    const yy = cy + (value - val) * pxPer;
+    const major = Math.abs(val / labelStep - Math.round(val / labelStep)) < 0.01;
+    ctx.strokeStyle = 'rgba(235,240,248,0.85)';
+    ctx.lineWidth = major ? 1.6 : 1;
+    ctx.beginPath();
+    ctx.moveTo(x + w - (major ? 9 : 5), yy);
+    ctx.lineTo(x + w, yy);
+    ctx.stroke();
+    if (major) ctx.fillStyle = 'rgba(235,240,248,0.92)', ctx.fillText(fmt(val), x + w / 2 - 3, yy);
+  }
+  ctx.restore();
+  /* current-value box, riding the center of the tape */
+  ctx.save();
+  ctx.fillStyle = '#04060a';
+  const bw = w + 8, bh = 17;
+  roundRectPath(ctx, x - 4, cy - bh / 2, bw, bh, 3);
+  ctx.fill();
+  ctx.strokeStyle = '#8affc1'; ctx.lineWidth = 1.2;
+  roundRectPath(ctx, x - 4, cy - bh / 2, bw, bh, 3);
+  ctx.stroke();
+  ctx.fillStyle = '#8affc1';
+  ctx.font = '600 12.5px Barlow, sans-serif';
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText((boxFmt || fmt)(Math.max(value, 0)), x + w / 2, cy + 0.5);
+  ctx.restore();
+}
+function drawPFD(){
+  const inner = dispFrame(L.pfd);
+  const w = inner.w, h = inner.h;
+  ctx.save();
+  ctx.globalAlpha = S.effPower;
+  const bg = ctx.createLinearGradient(0, 0, 0, h);
+  bg.addColorStop(0, '#0a1626'); bg.addColorStop(1, '#050b14');
+  ctx.fillStyle = bg; ctx.fillRect(0, 0, w, h);
+
+  const spdW = clamp(w * 0.21, 34, 48);
+  const altW = clamp(w * 0.24, 38, 54);
+  const ax = spdW + 2, aw = w - spdW - altW - 4;
+  const acx = ax + aw / 2, acy = h / 2 - 4;
+
+  /* attitude ball */
+  ctx.save();
+  ctx.beginPath(); ctx.rect(ax, 4, aw, h - 26); ctx.clip();
+  ctx.save();
+  ctx.translate(acx, acy);
+  ctx.rotate(-rad(S.bankDeg));
+  ctx.translate(0, S.pitchDeg * 2.1);
+  const sky = ctx.createLinearGradient(0, -h, 0, 0);
+  sky.addColorStop(0, '#3a7cc2'); sky.addColorStop(1, '#8fc0ea');
+  ctx.fillStyle = sky;
+  ctx.fillRect(-aw, -h, aw * 2, h);
+  const gnd = ctx.createLinearGradient(0, 0, 0, h);
+  gnd.addColorStop(0, '#8a6a42'); gnd.addColorStop(1, '#5f4630');
+  ctx.fillStyle = gnd;
+  ctx.fillRect(-aw, 0, aw * 2, h);
+  ctx.strokeStyle = 'rgba(255,255,255,0.8)'; ctx.lineWidth = 1.6;
+  for (const s of [-1, 1]){
+    ctx.beginPath(); ctx.moveTo(-aw * 0.30, s * 21); ctx.lineTo(aw * 0.30, s * 21); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(-aw * 0.18, s * 42); ctx.lineTo(aw * 0.18, s * 42); ctx.stroke();
+  }
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(-aw, -1.4, aw * 2, 2.8);
+  ctx.restore();
+  /* fixed aircraft symbol */
+  ctx.strokeStyle = '#ffd94d'; ctx.lineWidth = 3.2; ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.moveTo(acx - aw * 0.34, acy); ctx.lineTo(acx - aw * 0.13, acy); ctx.lineTo(acx - aw * 0.08, acy + aw * 0.08);
+  ctx.moveTo(acx + aw * 0.34, acy); ctx.lineTo(acx + aw * 0.13, acy); ctx.lineTo(acx + aw * 0.08, acy + aw * 0.08);
+  ctx.stroke();
+  ctx.fillStyle = '#ffd94d';
+  ctx.beginPath(); ctx.arc(acx, acy, 3, 0, 6.29); ctx.fill();
+  /* roll pointer */
+  ctx.save();
+  ctx.translate(acx, acy);
+  ctx.rotate(-rad(S.bankDeg));
+  ctx.fillStyle = '#ffd94d';
+  ctx.beginPath();
+  ctx.moveTo(0, -h / 2 + 12); ctx.lineTo(-4.5, -h / 2 + 21); ctx.lineTo(4.5, -h / 2 + 21);
+  ctx.closePath(); ctx.fill();
+  ctx.restore();
+  ctx.strokeStyle = 'rgba(255,255,255,0.65)'; ctx.lineWidth = 1.6;
+  for (const a of [-30, 0, 30]){
+    const ar = rad(a - 90);
+    const r0 = h / 2 - 8, r1 = h / 2 - (a === 0 ? 15 : 12);
+    ctx.beginPath();
+    ctx.moveTo(acx + Math.cos(ar) * r0, acy + Math.sin(ar) * r0);
+    ctx.lineTo(acx + Math.cos(ar) * r1, acy + Math.sin(ar) * r1);
+    ctx.stroke();
+  }
+  ctx.restore();
+
+  /* tapes */
+  drawTape(0, spdW, h - 18, S.speed, 0.5, 10, 20, v => String(Math.round(v)));
+  drawTape(w - altW, altW, h - 18, S.altitude, 0.045, 100, 500, v => String(Math.round(v / 100)), v => fmtInt(v));
+  /* heading readout rides the bottom of the attitude ball, clear of the yoke */
+  ctx.fillStyle = '#04060a';
+  roundRectPath(ctx, acx - 24, h - 48, 48, 14, 3);
+  ctx.fill();
+  ctx.strokeStyle = '#2c2f36'; ctx.lineWidth = 1;
+  roundRectPath(ctx, acx - 24, h - 48, 48, 14, 3);
+  ctx.stroke();
+  ctx.fillStyle = '#8affc1';
+  ctx.font = '600 11px Barlow, sans-serif';
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText(fmtHdg(S.heading) + '°', acx, h - 40.5);
+  /* VSI mini-readout, bottom right */
+  ctx.fillStyle = '#6fae9d';
+  ctx.font = '600 9px "Barlow Condensed", sans-serif';
+  ctx.textAlign = 'right';
+  const vsTxt = (S.vs >= 0 ? '+' : '−') + fmtInt(Math.abs(S.vs));
+  ctx.fillText('VS ' + vsTxt, w - 4, h - 10);
+  dispLabel('PFD', 5, 3);
+  ctx.restore();
+  dispGlass(inner);
+}
+
+/* ---------------- ND: navigation display ---------------- */
+function drawND(){
+  const inner = dispFrame(L.nd);
   const w = inner.w, h = inner.h;
   ctx.save();
   ctx.globalAlpha = S.effPower;
   const bg = ctx.createLinearGradient(0, 0, 0, h);
   bg.addColorStop(0, '#0b1c2a'); bg.addColorStop(1, '#06121c');
   ctx.fillStyle = bg; ctx.fillRect(0, 0, w, h);
-  /* grid */
-  ctx.strokeStyle = 'rgba(140,220,255,0.06)'; ctx.lineWidth = 1;
-  for (let gx = 0; gx < w; gx += 26){ ctx.beginPath(); ctx.moveTo(gx, 0); ctx.lineTo(gx, h); ctx.stroke(); }
-  for (let gy = 0; gy < h; gy += 26){ ctx.beginPath(); ctx.moveTo(0, gy); ctx.lineTo(w, gy); ctx.stroke(); }
-  /* land blobs drifting by */
-  ctx.fillStyle = 'rgba(20,64,47,0.9)';
-  const drift = (S.dist * 0.05) % (h * 1.5);
-  const blobs = [[0.22, 0.1, 34, 20], [0.68, 0.55, 44, 26], [0.4, 1.05, 38, 22], [0.85, 1.3, 30, 18]];
-  for (const b of blobs){
-    let by = b[1] * h + drift;
-    if (by > h + 30) by -= h * 1.5;
-    ctx.beginPath(); ctx.ellipse(b[0] * w, by, b[2], b[3], 0.4, 0, 6.29); ctx.fill();
-  }
+  const ccx = w / 2, ccy = h / 2 + 4, R = Math.min(w, h) / 2 - 9;
   /* range rings */
-  ctx.strokeStyle = 'rgba(110,220,180,0.28)';
-  ctx.beginPath(); ctx.arc(w / 2, h / 2, Math.min(w, h) * 0.24, 0, 6.29); ctx.stroke();
-  ctx.beginPath(); ctx.arc(w / 2, h / 2, Math.min(w, h) * 0.46, 0, 6.29); ctx.stroke();
-  /* the route: a curving dashed line with waypoints */
-  const pts = [[0.14, 0.88], [0.36, 0.56], [0.55, 0.64], [0.72, 0.34], [0.88, 0.14]];
+  ctx.strokeStyle = 'rgba(110,220,180,0.25)'; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.arc(ccx, ccy, R * 0.5, 0, 6.29); ctx.stroke();
+  ctx.beginPath(); ctx.arc(ccx, ccy, R, 0, 6.29); ctx.stroke();
+  /* a soft weather cell */
+  const wxg = ctx.createRadialGradient(ccx + R * 0.48, ccy - R * 0.4, 2, ccx + R * 0.48, ccy - R * 0.4, R * 0.34);
+  wxg.addColorStop(0, 'rgba(80,255,140,0.30)');
+  wxg.addColorStop(1, 'rgba(80,255,140,0)');
+  ctx.fillStyle = wxg;
+  ctx.beginPath(); ctx.arc(ccx + R * 0.48, ccy - R * 0.4, R * 0.34, 0, 6.29); ctx.fill();
+  /* the route ahead: dashed amber curve with waypoints */
+  const pts = [[0, 0.86], [-0.16, 0.42], [0.05, 0.05], [0.28, -0.38], [0.42, -0.78]];
   ctx.strokeStyle = 'rgba(255,217,77,0.9)';
-  ctx.lineWidth = 2.5;
-  ctx.setLineDash([7, 6]);
+  ctx.lineWidth = 2.2;
+  ctx.setLineDash([6, 5]);
   ctx.lineDashOffset = -S.dist * 0.12;
   ctx.beginPath();
-  ctx.moveTo(pts[0][0] * w, pts[0][1] * h);
+  ctx.moveTo(ccx + pts[0][0] * R, ccy + pts[0][1] * R);
   for (let i = 1; i < pts.length - 1; i++){
-    const mx = (pts[i][0] + pts[i + 1][0]) / 2 * w, my = (pts[i][1] + pts[i + 1][1]) / 2 * h;
-    ctx.quadraticCurveTo(pts[i][0] * w, pts[i][1] * h, mx, my);
+    const mx = ccx + (pts[i][0] + pts[i + 1][0]) / 2 * R, my = ccy + (pts[i][1] + pts[i + 1][1]) / 2 * R;
+    ctx.quadraticCurveTo(ccx + pts[i][0] * R, ccy + pts[i][1] * R, mx, my);
   }
-  ctx.lineTo(pts[pts.length - 1][0] * w, pts[pts.length - 1][1] * h);
+  ctx.lineTo(ccx + pts[pts.length - 1][0] * R, ccy + pts[pts.length - 1][1] * R);
   ctx.stroke();
   ctx.setLineDash([]);
   ctx.fillStyle = '#ffffff';
   for (const p of pts){
-    ctx.beginPath(); ctx.arc(p[0] * w, p[1] * h, 3.2, 0, 6.29); ctx.fill();
-    ctx.strokeStyle = 'rgba(255,255,255,0.5)'; ctx.lineWidth = 1.5;
-    ctx.beginPath(); ctx.arc(p[0] * w, p[1] * h, 6, 0, 6.29); ctx.stroke();
+    ctx.beginPath(); ctx.arc(ccx + p[0] * R, ccy + p[1] * R, 2.8, 0, 6.29); ctx.fill();
   }
-  /* the jet, center screen, nose on heading */
-  ctx.save();
-  ctx.translate(w / 2, h / 2);
-  ctx.rotate(rad(S.heading));
-  ctx.fillStyle = '#7fe7ff';
-  ctx.strokeStyle = '#06222e'; ctx.lineWidth = 1.5;
+  /* compass rose, track-up */
+  ctx.fillStyle = 'rgba(235,240,248,0.9)';
+  ctx.strokeStyle = 'rgba(235,240,248,0.75)';
+  ctx.font = '600 9px "Barlow Condensed", sans-serif';
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  for (let a = 0; a < 360; a += 15){
+    const ar = rad(a - S.heading - 90);
+    const major = a % 30 === 0;
+    ctx.lineWidth = major ? 1.8 : 1;
+    ctx.beginPath();
+    ctx.moveTo(ccx + Math.cos(ar) * (R - 1), ccy + Math.sin(ar) * (R - 1));
+    ctx.lineTo(ccx + Math.cos(ar) * (R - (major ? 8 : 5)), ccy + Math.sin(ar) * (R - (major ? 8 : 5)));
+    ctx.stroke();
+    if (major){
+      let lab;
+      if (a === 0) lab = 'N'; else if (a === 90) lab = 'E';
+      else if (a === 180) lab = 'S'; else if (a === 270) lab = 'W';
+      else lab = String(a / 10).padStart(2, '0');
+      ctx.fillText(lab, ccx + Math.cos(ar) * (R - 15), ccy + Math.sin(ar) * (R - 15));
+    }
+  }
+  /* own-ship symbol, nose up */
+  ctx.fillStyle = '#ffd94d';
+  ctx.strokeStyle = '#3a2c00'; ctx.lineWidth = 1.2;
   ctx.beginPath();
-  ctx.moveTo(0, -10); ctx.lineTo(3, -2); ctx.lineTo(10, 6); ctx.lineTo(10, 8.5);
-  ctx.lineTo(3.4, 6.4); ctx.lineTo(3.4, 9.6); ctx.lineTo(5.4, 12); ctx.lineTo(-5.4, 12);
-  ctx.lineTo(-3.4, 9.6); ctx.lineTo(-3.4, 6.4); ctx.lineTo(-10, 8.5); ctx.lineTo(-10, 6);
-  ctx.lineTo(-3, -2);
+  ctx.moveTo(ccx, ccy - 9); ctx.lineTo(ccx + 2.6, ccy - 1.5); ctx.lineTo(ccx + 9, ccy + 5.5);
+  ctx.lineTo(ccx + 9, ccy + 7.8); ctx.lineTo(ccx + 3, ccy + 5.8); ctx.lineTo(ccx + 3, ccy + 8.8);
+  ctx.lineTo(ccx + 5, ccy + 11); ctx.lineTo(ccx - 5, ccy + 11); ctx.lineTo(ccx - 3, ccy + 8.8);
+  ctx.lineTo(ccx - 3, ccy + 5.8); ctx.lineTo(ccx - 9, ccy + 7.8); ctx.lineTo(ccx - 9, ccy + 5.5);
+  ctx.lineTo(ccx - 2.6, ccy - 1.5);
   ctx.closePath(); ctx.fill(); ctx.stroke();
-  ctx.restore();
-  ctx.strokeStyle = 'rgba(127,231,255,0.4)'; ctx.lineWidth = 1.5;
-  ctx.beginPath(); ctx.arc(w / 2, h / 2, 15, 0, 6.29); ctx.stroke();
-  screenLabel('MAP', 6, 4);
+  dispLabel('NAV', 5, 3);
   ctx.fillStyle = '#6fae9d';
   ctx.font = '600 9px "Barlow Condensed", sans-serif';
   ctx.textAlign = 'right'; ctx.textBaseline = 'bottom';
-  ctx.fillText('20 NM', w - 6, h - 4);
+  ctx.fillText('40 NM', w - 5, h - 3);
   ctx.restore();
-  screenGlass(inner);
+  dispGlass(inner);
 }
 
-/* ---------------- right MFD: radar / weather scope ---------------- */
-function drawRadar(){
-  const inner = screenFrame(L.radar, 'RADAR');
-  const w = inner.w, h = inner.h;
+/* ---------------- placard, buttons, seatbelt sign, big action ---------------- */
+function drawPlacard(){
+  const p = L.placard;
   ctx.save();
-  ctx.globalAlpha = S.effPower;
-  const ccx = w / 2, ccy = h / 2, R = Math.min(w, h) / 2 - 5;
-  const bg = ctx.createRadialGradient(ccx, ccy, 2, ccx, ccy, R + 8);
-  bg.addColorStop(0, '#07190d'); bg.addColorStop(1, '#020805');
-  ctx.fillStyle = bg; ctx.fillRect(0, 0, w, h);
-  ctx.save();
-  ctx.beginPath(); ctx.arc(ccx, ccy, R, 0, 6.29); ctx.clip();
-  /* weather + target blobs: bright just after the sweep passes */
-  for (const b of radarBlobs){
-    let d = (S.sweepA - b.a) % (Math.PI * 2);
-    if (d < 0) d += Math.PI * 2;
-    const bright = Math.exp(-d * 1.5);
-    const bx = ccx + Math.cos(b.a) * b.d * R, by = ccy + Math.sin(b.a) * b.d * R;
-    if (b.type === 'wx'){
-      const bg2 = ctx.createRadialGradient(bx, by, 1, bx, by, b.s);
-      bg2.addColorStop(0, 'rgba(' + b.hue + ',' + (0.10 + 0.5 * bright) + ')');
-      bg2.addColorStop(1, 'rgba(' + b.hue + ',0)');
-      ctx.fillStyle = bg2;
-      ctx.beginPath(); ctx.arc(bx, by, b.s, 0, 6.29); ctx.fill();
-    } else {
-      ctx.fillStyle = 'rgba(' + b.hue + ',' + (0.14 + 0.86 * bright) + ')';
-      ctx.beginPath(); ctx.arc(bx, by, b.s, 0, 6.29); ctx.fill();
-    }
-  }
-  /* sweep beam with fading trail */
-  for (let i = 0; i < 16; i++){
-    const a0 = S.sweepA - i * 0.05;
-    ctx.fillStyle = 'rgba(90,255,160,' + (0.11 * (1 - i / 16)) + ')';
-    ctx.beginPath();
-    ctx.moveTo(ccx, ccy);
-    ctx.arc(ccx, ccy, R, a0 - 0.05, a0);
-    ctx.closePath(); ctx.fill();
-  }
-  ctx.strokeStyle = 'rgba(120,255,180,0.75)'; ctx.lineWidth = 1.5;
-  ctx.beginPath(); ctx.moveTo(ccx, ccy);
-  ctx.lineTo(ccx + Math.cos(S.sweepA) * R, ccy + Math.sin(S.sweepA) * R); ctx.stroke();
-  ctx.restore();
-  /* rings + cross */
-  ctx.strokeStyle = 'rgba(80,255,150,0.30)'; ctx.lineWidth = 1;
-  for (const f of [0.33, 0.66, 1]){
-    ctx.beginPath(); ctx.arc(ccx, ccy, R * f, 0, 6.29); ctx.stroke();
-  }
-  ctx.beginPath();
-  ctx.moveTo(ccx - R, ccy); ctx.lineTo(ccx + R, ccy);
-  ctx.moveTo(ccx, ccy - R); ctx.lineTo(ccx, ccy + R);
-  ctx.stroke();
-  screenLabel('RADAR', 6, 4, '#8fe8b0');
-  ctx.restore();
-  screenGlass(inner);
-}
-
-/* ---------------- gauges ---------------- */
-function gaugeBezel(x, y, r){
-  const g = ctx.createRadialGradient(x - r * 0.3, y - r * 0.3, r * 0.2, x, y, r);
-  g.addColorStop(0, '#26282e'); g.addColorStop(0.8, '#141519'); g.addColorStop(1, '#0a0b0d');
+  const g = ctx.createLinearGradient(0, p.y, 0, p.y + p.h);
+  g.addColorStop(0, '#2a2c31'); g.addColorStop(1, '#17181c');
   ctx.fillStyle = g;
-  ctx.beginPath(); ctx.arc(x, y, r, 0, 6.29); ctx.fill();
-  ctx.strokeStyle = 'rgba(255,255,255,0.13)'; ctx.lineWidth = 1.5;
-  ctx.beginPath(); ctx.arc(x, y, r - 1, 0, 6.29); ctx.stroke();
-  const fg = ctx.createRadialGradient(x, y, r * 0.1, x, y, r * 0.88);
-  fg.addColorStop(0, '#1d2026'); fg.addColorStop(1, '#0b0c0f');
-  ctx.fillStyle = fg;
-  ctx.beginPath(); ctx.arc(x, y, r * 0.88, 0, 6.29); ctx.fill();
-  if (S.lightsNight){
-    ctx.strokeStyle = 'rgba(255,170,80,0.35)'; ctx.lineWidth = 2;
-    ctx.beginPath(); ctx.arc(x, y, r * 0.88, 0, 6.29); ctx.stroke();
-  }
-}
-function gaugeLabel(text, x, y){
-  ctx.fillStyle = '#8b93a3';
-  ctx.font = '600 9px "Barlow Condensed", sans-serif';
-  ctx.textAlign = 'center'; ctx.textBaseline = 'top';
-  ctx.fillText(text, x, y);
-}
-function digitalBox(x, y, w, h, text, size, color){
-  ctx.fillStyle = '#04060a';
-  roundRectPath(ctx, x - w / 2, y - h / 2, w, h, 3);
+  roundRectPath(ctx, p.x, p.y, p.w, p.h, 5);
   ctx.fill();
-  ctx.strokeStyle = '#2c2f36'; ctx.lineWidth = 1;
-  roundRectPath(ctx, x - w / 2, y - h / 2, w, h, 3);
+  ctx.strokeStyle = 'rgba(216,198,144,0.35)'; ctx.lineWidth = 1;
+  roundRectPath(ctx, p.x, p.y, p.w, p.h, 5);
   ctx.stroke();
-  ctx.fillStyle = color || '#8affc1';
-  ctx.font = '600 ' + (size || 12) + 'px Barlow, sans-serif';
+  ctx.fillStyle = '#d8c690';
+  ctx.font = '600 ' + clamp(p.w * 0.062, 9.5, 13) + 'px "Barlow Condensed", sans-serif';
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-  ctx.fillText(text, x, y + 0.5);
-}
-function needle(x, y, ang, len, color, wdt){
-  ctx.save();
-  ctx.translate(x, y); ctx.rotate(ang);
-  ctx.fillStyle = color || '#f2f5fa';
-  ctx.beginPath();
-  ctx.moveTo(-len * 0.18, -wdt / 2); ctx.lineTo(len, 0); ctx.lineTo(-len * 0.18, wdt / 2);
-  ctx.closePath(); ctx.fill();
-  ctx.restore();
-  ctx.fillStyle = '#0c0d10';
-  ctx.beginPath(); ctx.arc(x, y, 4, 0, 6.29); ctx.fill();
-  ctx.strokeStyle = 'rgba(255,255,255,0.35)'; ctx.lineWidth = 1;
-  ctx.beginPath(); ctx.arc(x, y, 4, 0, 6.29); ctx.stroke();
-}
-function drawHorizonGauge(){
-  const { ahX: x, cy: y, ahR: r } = L.gauges;
-  const fr = r * 0.88;
-  ctx.save();
-  ctx.beginPath(); ctx.arc(x, y, fr, 0, 6.29); ctx.clip();
-  ctx.save();
-  ctx.translate(x, y);
-  ctx.rotate(-rad(S.bank * 38) - S.rollOffset);
-  ctx.translate(0, S.pitch * fr * 0.52);
-  const sky = ctx.createLinearGradient(0, -fr * 1.7, 0, 0);
-  sky.addColorStop(0, '#3d7dc4'); sky.addColorStop(1, '#79aede');
-  ctx.fillStyle = sky;
-  ctx.fillRect(-fr * 1.7, -fr * 1.7, fr * 3.4, fr * 1.7);
-  const gnd = ctx.createLinearGradient(0, 0, 0, fr * 1.7);
-  gnd.addColorStop(0, '#8a6a42'); gnd.addColorStop(1, '#5f4630');
-  ctx.fillStyle = gnd;
-  ctx.fillRect(-fr * 1.7, 0, fr * 3.4, fr * 1.7);
-  /* pitch ladder */
-  ctx.strokeStyle = 'rgba(255,255,255,0.85)'; ctx.lineWidth = 2;
-  for (const s of [-1, 1]){
-    ctx.beginPath(); ctx.moveTo(-fr * 0.52, s * fr * 0.26); ctx.lineTo(fr * 0.52, s * fr * 0.26); ctx.stroke();
-    ctx.beginPath(); ctx.moveTo(-fr * 0.3, s * fr * 0.52); ctx.lineTo(fr * 0.3, s * fr * 0.52); ctx.stroke();
-  }
-  ctx.fillStyle = '#ffffff';
-  ctx.fillRect(-fr * 1.7, -1.5, fr * 3.4, 3);
-  ctx.restore();
-  /* fixed aircraft symbol */
-  ctx.strokeStyle = '#ffb52e'; ctx.lineWidth = 3.5; ctx.lineCap = 'round';
-  ctx.beginPath();
-  ctx.moveTo(x - fr * 0.58, y); ctx.lineTo(x - fr * 0.2, y); ctx.lineTo(x - fr * 0.13, y + fr * 0.13);
-  ctx.moveTo(x + fr * 0.58, y); ctx.lineTo(x + fr * 0.2, y); ctx.lineTo(x + fr * 0.13, y + fr * 0.13);
-  ctx.stroke();
-  ctx.fillStyle = '#ffb52e';
-  ctx.beginPath(); ctx.arc(x, y, 3.2, 0, 6.29); ctx.fill();
-  ctx.restore();
-  gaugeBezelRingOnly(x, y, r);
-  /* roll pointer + scale */
-  ctx.save();
-  ctx.translate(x, y);
-  ctx.rotate(-rad(S.bank * 38) - S.rollOffset);
-  ctx.fillStyle = '#ffb52e';
-  ctx.beginPath();
-  ctx.moveTo(0, -fr + 3); ctx.lineTo(-5, -fr + 12); ctx.lineTo(5, -fr + 12);
-  ctx.closePath(); ctx.fill();
-  ctx.restore();
-  ctx.strokeStyle = 'rgba(255,255,255,0.7)'; ctx.lineWidth = 2;
-  for (const a of [-60, -30, 0, 30, 60]){
-    const ar = rad(a - 90);
-    ctx.beginPath();
-    ctx.moveTo(x + Math.cos(ar) * (fr - 1), y + Math.sin(ar) * (fr - 1));
-    ctx.lineTo(x + Math.cos(ar) * (fr - (a === 0 ? 9 : 6)), y + Math.sin(ar) * (fr - (a === 0 ? 9 : 6)));
-    ctx.stroke();
-  }
-  gaugeLabel('ATTITUDE', x, y + r + 3);
-}
-function gaugeBezelRingOnly(x, y, r){
-  ctx.save();
-  ctx.strokeStyle = '#26282e'; ctx.lineWidth = r * 0.24;
-  ctx.beginPath(); ctx.arc(x, y, r - r * 0.12, 0, 6.29); ctx.stroke();
-  ctx.strokeStyle = 'rgba(255,255,255,0.12)'; ctx.lineWidth = 1.5;
-  ctx.beginPath(); ctx.arc(x, y, r - 1, 0, 6.29); ctx.stroke();
+  try { ctx.letterSpacing = '2px'; } catch (e) {}
+  ctx.fillText('CAPTAIN ROCCO AIRLINES', p.x + p.w / 2, p.y + p.h / 2 + 0.5);
+  try { ctx.letterSpacing = '0px'; } catch (e) {}
   ctx.restore();
 }
-function tickRing(x, y, r, max, majorStep, fmt, sweepFrom, sweepTo){
-  ctx.save();
-  ctx.strokeStyle = 'rgba(235,240,248,0.85)';
-  ctx.fillStyle = 'rgba(235,240,248,0.9)';
-  ctx.font = '600 ' + Math.max(8, r * 0.24) + 'px "Barlow Condensed", sans-serif';
-  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-  const fr = r * 0.88;
-  for (let v = 0; v <= max + 0.001; v += majorStep / 2){
-    const a = rad(sweepFrom + (sweepTo - sweepFrom) * (v / max));
-    const major = Math.abs(v / majorStep - Math.round(v / majorStep)) < 0.01;
-    ctx.lineWidth = major ? 2 : 1;
-    const l = major ? fr * 0.14 : fr * 0.08;
-    ctx.beginPath();
-    ctx.moveTo(x + Math.cos(a) * (fr - 2), y + Math.sin(a) * (fr - 2));
-    ctx.lineTo(x + Math.cos(a) * (fr - 2 - l), y + Math.sin(a) * (fr - 2 - l));
-    ctx.stroke();
-    if (major){
-      ctx.fillText(fmt(v), x + Math.cos(a) * fr * 0.6, y + Math.sin(a) * fr * 0.6);
-    }
-  }
-  ctx.restore();
-}
-function drawAirspeed(){
-  const { asX: x, cy: y, sR: r } = L.gauges;
-  gaugeBezel(x, y, r);
-  tickRing(x, y, r, 800, 200, v => String(v / 100), 135, 405);
-  needle(x, y, rad(135 + 270 * clamp(S.speed / 800, 0, 1)), r * 0.68, '#f2f5fa', 4);
-  digitalBox(x, y + r * 0.52, r * 1.05, 15, String(Math.round(S.speed)), 11.5);
-  gaugeLabel('AIRSPEED · KT', x, y + r + 3);
-}
-function drawAltimeter(){
-  const { alX: x, cy: y, sR: r } = L.gauges;
-  gaugeBezel(x, y, r);
-  tickRing(x, y, r, 9, 1, v => String(v), 135, 405);
-  needle(x, y, rad(135 + 270 * ((S.altitude % 1000) / 1000)), r * 0.68, '#f2f5fa', 4);
-  /* ten-thousands hand */
-  needle(x, y, rad(135 + 270 * clamp(S.altitude / 45000, 0, 1)), r * 0.44, '#ffb52e', 3);
-  digitalBox(x, y + r * 0.52, r * 1.3, 15, fmtInt(S.altitude), 10.5);
-  gaugeLabel('ALTITUDE · FT', x, y + r + 3);
-}
-function drawVSI(){
-  const { x, y, r } = L.vsi;
-  gaugeBezel(x, y, r);
-  ctx.save();
-  ctx.strokeStyle = 'rgba(235,240,248,0.8)'; ctx.lineWidth = 1.5;
-  ctx.fillStyle = 'rgba(235,240,248,0.9)';
-  ctx.font = '600 8px "Barlow Condensed", sans-serif';
-  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-  for (const v of [-4, -2, 0, 2, 4]){
-    const a = rad(-90 + (v / 4) * 120);
-    const fr = r * 0.88;
-    ctx.beginPath();
-    ctx.moveTo(x + Math.cos(a) * (fr - 1), y + Math.sin(a) * (fr - 1));
-    ctx.lineTo(x + Math.cos(a) * (fr - 5), y + Math.sin(a) * (fr - 5));
-    ctx.stroke();
-    if (v !== 0) ctx.fillText(String(Math.abs(v)), x + Math.cos(a) * fr * 0.58, y + Math.sin(a) * fr * 0.58);
-  }
-  ctx.restore();
-  needle(x, y, rad(-90 + clamp(S.vs / 4000, -1, 1) * 120), r * 0.62, '#ffb52e', 3);
-  gaugeLabel('VERT · 1000', x, y + r + 2);
-}
-function drawHeadingTape(){
-  const t = L.tape;
-  ctx.save();
-  ctx.fillStyle = '#04060a';
-  roundRectPath(ctx, t.x, t.y, t.w, t.h, 4);
-  ctx.fill();
-  ctx.strokeStyle = '#2c2f36'; ctx.lineWidth = 1;
-  roundRectPath(ctx, t.x, t.y, t.w, t.h, 4);
-  ctx.stroke();
-  ctx.beginPath();
-  roundRectPath(ctx, t.x, t.y, t.w, t.h, 4);
-  ctx.clip();
-  const cxp = t.x + t.w / 2, pxPerDeg = t.w / 80;
-  ctx.fillStyle = 'rgba(235,240,248,0.92)';
-  ctx.strokeStyle = 'rgba(235,240,248,0.8)';
-  ctx.font = '600 10px "Barlow Condensed", sans-serif';
-  ctx.textAlign = 'center'; ctx.textBaseline = 'top';
-  const startD = Math.floor((S.heading - 42) / 5) * 5;
-  for (let d = startD; d <= S.heading + 42; d += 5){
-    const dd = ((d % 360) + 360) % 360;
-    const x = cxp + (d - S.heading) * pxPerDeg;
-    const major = dd % 30 === 0;
-    ctx.lineWidth = major ? 2 : 1;
-    ctx.beginPath(); ctx.moveTo(x, t.y + t.h); ctx.lineTo(x, t.y + t.h - (major ? 8 : 5)); ctx.stroke();
-    if (dd % 30 === 0){
-      let lab;
-      if (dd === 0) lab = 'N'; else if (dd === 90) lab = 'E';
-      else if (dd === 180) lab = 'S'; else if (dd === 270) lab = 'W';
-      else lab = String(dd / 10).padStart(2, '0');
-      ctx.fillText(lab, x, t.y + 1.5);
-    }
-  }
-  ctx.restore();
-  digitalBox(cxp, t.y + t.h / 2, 42, 15, String(Math.round(S.heading)).padStart(3, '0') + '°', 11.5);
-  ctx.fillStyle = '#ffb52e';
-  ctx.beginPath();
-  ctx.moveTo(cxp, t.y + t.h + 1); ctx.lineTo(cxp - 4.5, t.y + t.h + 7); ctx.lineTo(cxp + 4.5, t.y + t.h + 7);
-  ctx.closePath(); ctx.fill();
-}
-function drawDataStack(){
-  const d = L.dataStack;
-  ctx.save();
-  ctx.fillStyle = '#04060a';
-  roundRectPath(ctx, d.x, d.y, d.w, d.h, 4);
-  ctx.fill();
-  ctx.strokeStyle = '#2c2f36'; ctx.lineWidth = 1;
-  roundRectPath(ctx, d.x, d.y, d.w, d.h, 4);
-  ctx.stroke();
-  ctx.font = '600 10px "Barlow Condensed", sans-serif';
-  ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
-  ctx.fillStyle = '#6fae9d';
-  ctx.fillText('SPD', d.x + 6, d.y + 8);
-  ctx.fillText('ALT', d.x + 6, d.y + 22);
-  ctx.font = '600 12px Barlow, sans-serif';
-  ctx.fillStyle = '#8affc1';
-  ctx.textAlign = 'right';
-  ctx.fillText(String(Math.round(S.speed)), d.x + d.w - 6, d.y + 8);
-  ctx.fillText(fmtInt(S.altitude), d.x + d.w - 6, d.y + 22);
-  ctx.restore();
-}
-function drawTerrainLamp(){
-  const { x, y } = L.lamp;
-  const flashing = S.assist && S.power > 0.5 && (S.time * 2.4) % 1 < 0.62;
-  drawLED(x, y, 6, '#ffb52e', flashing);
-  ctx.fillStyle = flashing ? '#ffb52e' : '#79808e';
-  ctx.font = '600 8px "Barlow Condensed", sans-serif';
-  ctx.textAlign = 'center'; ctx.textBaseline = 'top';
-  ctx.fillText('TERRAIN', x, y + 8);
-}
-
-/* ---------------- switches + COM ---------------- */
 function drawSwitchButton(rect, id, label, ledOn, ledColor){
   const pressed = S.time - (S.press[id] || -9) < 0.13;
   const dy = pressed ? 2 : 0;
@@ -1346,10 +1470,10 @@ function drawSwitchButton(rect, id, label, ledOn, ledColor){
   ctx.fillStyle = 'rgba(255,255,255,0.14)';
   ctx.fillRect(rect.x + 6, rect.y + dy + 1.5, rect.w - 12, 1.5);
   ctx.fillStyle = '#d7dde8';
-  ctx.font = '600 ' + clamp(rect.w * 0.21, 10, 13.5) + 'px "Barlow Condensed", sans-serif';
+  ctx.font = '600 ' + clamp(rect.w * 0.20, 10, 13.5) + 'px "Barlow Condensed", sans-serif';
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-  ctx.fillText(label, rect.x + rect.w / 2, rect.y + dy + rect.h / 2 + (id === 'gear' ? -5 : 1));
-  drawLED(rect.x + rect.w - 11, rect.y + dy + 11, 4, ledColor, ledOn && S.effPower > 0.35);
+  ctx.fillText(label, rect.x + rect.w / 2, rect.y + dy + rect.h / 2 + (id === 'gear' ? -4 : 1));
+  drawLED(rect.x + rect.w - 10, rect.y + dy + 10, 3.8, ledColor, ledOn && S.effPower > 0.35);
   ctx.restore();
 }
 function gearLightStates(){
@@ -1357,46 +1481,96 @@ function gearLightStates(){
   if (S.gearTransit > 0) return ((S.time * 3) % 1 < 0.72) ? ['red', 'red', 'red'] : ['off', 'off', 'off'];
   return S.gearDown ? ['green', 'green', 'green'] : ['off', 'off', 'off'];
 }
-function drawSwitches(){
+function drawSignCell(){
+  const r = L.cells.sign;
+  ctx.save();
+  ctx.fillStyle = '#0a0b0e';
+  roundRectPath(ctx, r.x, r.y, r.w, r.h, 9);
+  ctx.fill();
+  ctx.strokeStyle = '#23252b'; ctx.lineWidth = 1.5;
+  roundRectPath(ctx, r.x, r.y, r.w, r.h, 9);
+  ctx.stroke();
+  const on = S.seatbelt && S.effPower > 0.3;
+  ctx.fillStyle = on ? '#ffb52e' : '#4a4f59';
+  if (on){ ctx.shadowColor = 'rgba(255,181,46,0.8)'; ctx.shadowBlur = 8; }
+  ctx.font = '700 ' + clamp(r.w * 0.17, 9, 12.5) + 'px "Barlow Condensed", sans-serif';
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText('SEAT BELT', r.x + r.w / 2, r.y + r.h / 2 - 4);
+  ctx.shadowBlur = 0;
+  ctx.font = '600 ' + clamp(r.w * 0.13, 8, 10.5) + 'px "Barlow Condensed", sans-serif';
+  ctx.fillStyle = on ? '#ffd98a' : '#3d424c';
+  ctx.fillText(on ? 'ON' : 'OFF', r.x + r.w / 2, r.y + r.h / 2 + 10);
+  ctx.restore();
+}
+function drawButtons(){
   drawSwitchButton(L.cells.gear, 'gear', 'GEAR', S.gearDown || S.gearTransit > 0, '#57ff8a');
-  /* the three gear lights live under the GEAR label */
   const states = gearLightStates();
   const gr = L.cells.gear;
   const cols = { green: '#43ff7a', red: '#ff5148', off: null };
   for (let i = 0; i < 3; i++){
     const st = states[i];
-    drawLED(gr.x + gr.w / 2 + (i - 1) * 15, gr.y + gr.h - 9, 4.2, cols[st] || '#43ff7a', st !== 'off');
+    let col = cols[st] || '#43ff7a', on = st !== 'off';
+    /* after liftoff the gear light blinks amber: "psst — gear up!" */
+    if (S.gearHintT > 0 && S.gearDown && S.gearTransit === 0){
+      col = '#ffb52e';
+      on = (S.time * 2.6) % 1 < 0.62;
+    }
+    drawLED(gr.x + gr.w / 2 + (i - 1) * 14, gr.y + gr.h - 8, 4, col, on);
   }
+  drawSwitchButton(L.cells.ding, 'ding', 'DING', S.seatbelt, '#ffb52e');
   drawSwitchButton(L.cells.lights, 'lights', 'LIGHTS', S.lightsNight, '#ffd94d');
   drawSwitchButton(L.cells.radio, 'radio', 'RADIO', S.radioT > 0, '#7fe7ff');
   drawSwitchButton(L.cells.ap, 'ap', 'A/P', S.autopilot, '#57ff8a');
-  /* COM radio display */
-  const c = L.com;
+  drawSignCell();
+}
+function drawActionButton(){
+  const r = L.action;
+  let label, sub, c0, c1, active = false;
+  if (S.phase === 'ground'){ label = 'TAKE OFF'; sub = 'ready when you are'; c0 = '#4cc96a'; c1 = '#2b8a3e'; active = S.spool > 0.85; }
+  else if (S.phase === 'takeoff'){ label = 'TAKING OFF'; sub = ''; c0 = '#5a6068'; c1 = '#3a3e44'; }
+  else if (S.phase === 'air'){ label = 'LAND'; sub = 'the plane lines it up'; c0 = '#4d9de0'; c1 = '#1f5fa8'; active = true; }
+  else if (S.phase === 'landing'){ label = 'LANDING'; sub = ''; c0 = '#5a6068'; c1 = '#3a3e44'; }
+  else { label = 'ARRIVING'; sub = ''; c0 = '#5a6068'; c1 = '#3a3e44'; }
+  const pressed = S.time - (S.press.action || -9) < 0.13;
+  const dy = pressed ? 2 : 0;
   ctx.save();
-  ctx.fillStyle = '#04060a';
-  roundRectPath(ctx, c.x, c.y, c.w, c.h, 4);
+  ctx.fillStyle = 'rgba(0,0,0,0.5)';
+  roundRectPath(ctx, r.x, r.y + 3, r.w, r.h, 12);
   ctx.fill();
-  ctx.strokeStyle = '#2c2f36'; ctx.lineWidth = 1;
-  roundRectPath(ctx, c.x, c.y, c.w, c.h, 4);
+  const g = ctx.createLinearGradient(0, r.y, 0, r.y + r.h);
+  g.addColorStop(0, c0); g.addColorStop(1, c1);
+  ctx.fillStyle = g;
+  roundRectPath(ctx, r.x, r.y + dy, r.w, r.h, 12);
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(255,255,255,0.35)'; ctx.lineWidth = 1.5;
+  roundRectPath(ctx, r.x, r.y + dy, r.w, r.h, 12);
   ctx.stroke();
-  if (S.effPower > 0.3){
-    ctx.fillStyle = '#6fae9d';
-    ctx.font = '600 9px "Barlow Condensed", sans-serif';
-    ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
-    ctx.fillText('COM', c.x + 6, c.y + c.h / 2);
-    let freq = S.radioFreq;
-    if (S.radioT > 0.85) freq = (118 + Math.random() * 18).toFixed(3);
-    ctx.fillStyle = '#8affc1';
-    ctx.font = '600 13px Barlow, sans-serif';
-    ctx.textAlign = 'right';
-    ctx.fillText(freq, c.x + c.w - 6, c.y + c.h / 2 + 0.5);
+  ctx.fillStyle = 'rgba(255,255,255,0.22)';
+  ctx.fillRect(r.x + 8, r.y + dy + 2, r.w - 16, 2);
+  if (!active && (S.phase === 'ground')) ctx.globalAlpha = 0.55;
+  /* little runway glyph */
+  const gx = r.x + 26, gy = r.y + dy + r.h / 2;
+  ctx.fillStyle = 'rgba(255,255,255,0.92)';
+  ctx.beginPath();
+  ctx.moveTo(gx - 9, gy + 9); ctx.lineTo(gx - 3.5, gy - 9); ctx.lineTo(gx + 3.5, gy - 9); ctx.lineTo(gx + 9, gy + 9);
+  ctx.closePath(); ctx.fill();
+  ctx.fillStyle = c1;
+  for (let i = 0; i < 3; i++) ctx.fillRect(gx - 0.9, gy - 6 + i * 6, 1.8, 3.4);
+  ctx.fillStyle = '#ffffff';
+  ctx.font = '800 ' + clamp(r.h * 0.44, 16, 24) + 'px "Baloo 2", sans-serif';
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText(label, r.x + r.w / 2 + 12, r.y + dy + r.h / 2 + (sub ? -5 : 1));
+  if (sub){
+    ctx.font = '600 ' + clamp(r.h * 0.22, 9, 11.5) + 'px "Barlow Condensed", sans-serif';
+    ctx.fillStyle = 'rgba(255,255,255,0.85)';
+    ctx.fillText(sub, r.x + r.w / 2 + 12, r.y + dy + r.h - 9);
   }
   ctx.restore();
 }
 
-/* ---------------- throttle quadrant + barrel roll ---------------- */
-function drawThrottle(){
-  const z = L.throttleZone;
+/* ---------------- thrust quadrant: twin levers, one handle ---------------- */
+function drawThrust(){
+  const z = L.thr;
   ctx.save();
   const g = ctx.createLinearGradient(0, z.y, 0, z.y + z.h);
   g.addColorStop(0, '#282a30'); g.addColorStop(1, '#15161a');
@@ -1410,151 +1584,96 @@ function drawThrottle(){
   ctx.fillStyle = '#8b93a3';
   ctx.font = '600 9px "Barlow Condensed", sans-serif';
   ctx.textAlign = 'center'; ctx.textBaseline = 'top';
-
-  /* BARREL ROLL — the big red button */
-  const rb = L.rollBtn;
-  ctx.save();
-  ctx.strokeStyle = 'rgba(255,213,79,0.75)';
-  ctx.lineWidth = 2.5;
-  ctx.setLineDash([6, 5]);
-  ctx.beginPath(); ctx.arc(rb.x, rb.y, rb.r + 4, S.time * 0.4, S.time * 0.4 + 6.29); ctx.stroke();
-  ctx.setLineDash([]);
-  const pressed = S.time - (S.press.roll || -9) < 0.13;
-  const rg2 = ctx.createRadialGradient(rb.x - rb.r * 0.3, rb.y - rb.r * 0.35, 2, rb.x, rb.y, rb.r);
-  rg2.addColorStop(0, '#ff7a6e'); rg2.addColorStop(0.55, '#e63329'); rg2.addColorStop(1, '#a31212');
-  ctx.fillStyle = rg2;
-  ctx.beginPath(); ctx.arc(rb.x, rb.y, rb.r - (pressed ? 2 : 0), 0, 6.29); ctx.fill();
-  ctx.strokeStyle = '#2b2e35'; ctx.lineWidth = 3.5;
-  ctx.beginPath(); ctx.arc(rb.x, rb.y, rb.r, 0, 6.29); ctx.stroke();
-  ctx.fillStyle = '#ffffff';
-  ctx.font = '700 ' + clamp(rb.r * 0.42, 9, 13) + 'px "Barlow Condensed", sans-serif';
-  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-  ctx.fillText('BARREL', rb.x, rb.y - rb.r * 0.22);
-  ctx.fillText('ROLL', rb.x, rb.y + rb.r * 0.24);
-  ctx.restore();
-
-  /* the slot */
-  const slotW = 15;
-  ctx.fillStyle = '#07080a';
-  roundRectPath(ctx, L.thrCx - slotW / 2, L.slotTop - 6, slotW, (L.slotBot - L.slotTop) + 12, 7);
-  ctx.fill();
-  ctx.strokeStyle = 'rgba(255,255,255,0.10)'; ctx.lineWidth = 1;
-  roundRectPath(ctx, L.thrCx - slotW / 2, L.slotTop - 6, slotW, (L.slotBot - L.slotTop) + 12, 7);
-  ctx.stroke();
-  /* afterburner zone at the top of the slot */
-  const abH = (L.slotBot - L.slotTop) * 0.13;
-  ctx.save();
-  roundRectPath(ctx, L.thrCx - slotW / 2, L.slotTop - 6, slotW, abH + 6, 7);
-  ctx.clip();
-  ctx.fillStyle = 'rgba(255,110,26,0.30)';
-  ctx.fillRect(L.thrCx - slotW / 2, L.slotTop - 6, slotW, abH + 6);
-  ctx.strokeStyle = 'rgba(255,150,50,0.8)'; ctx.lineWidth = 2;
-  for (let sx = -10; sx < 22; sx += 7){
-    ctx.beginPath();
-    ctx.moveTo(L.thrCx + sx, L.slotTop + abH + 4);
-    ctx.lineTo(L.thrCx + sx + 8, L.slotTop - 6);
+  ctx.fillText('1', L.thrCx - 13, z.y + 5);
+  ctx.fillText('2', L.thrCx + 13, z.y + 5);
+  /* the twin slots */
+  for (const off of [-13, 13]){
+    ctx.fillStyle = '#07080a';
+    roundRectPath(ctx, L.thrCx + off - 6, L.slotTop - 5, 12, (L.slotBot - L.slotTop) + 10, 6);
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(255,255,255,0.10)'; ctx.lineWidth = 1;
+    roundRectPath(ctx, L.thrCx + off - 6, L.slotTop - 5, 12, (L.slotBot - L.slotTop) + 10, 6);
     ctx.stroke();
   }
-  ctx.restore();
   /* ticks + end labels */
   ctx.fillStyle = '#79808e';
   ctx.font = '600 8px "Barlow Condensed", sans-serif';
   ctx.textAlign = 'left';
   for (const f of [0, 0.25, 0.5, 0.75, 1]){
     const ty = L.slotBot - f * (L.slotBot - L.slotTop);
-    ctx.fillRect(L.thrCx + slotW / 2 + 3, ty - 0.75, f === 0 || f === 1 ? 8 : 5, 1.5);
+    ctx.fillRect(L.thrCx + 22, ty - 0.75, f === 0 || f === 1 ? 7 : 4, 1.5);
   }
-  ctx.fillText('MAX', L.thrCx + slotW / 2 + 3, L.slotTop - 5);
-  ctx.fillText('IDLE', L.thrCx + slotW / 2 + 3, L.slotBot - 3);
-  ctx.fillStyle = S.afterburner ? '#ff9a3c' : '#79808e';
-  ctx.font = '700 10px "Barlow Condensed", sans-serif';
-  ctx.textAlign = 'right';
-  ctx.fillText('AB', L.thrCx - slotW / 2 - 4, L.slotTop + 1);
-
-  /* the lever */
+  ctx.fillText('MAX', L.thrCx + 22, L.slotTop - 4);
+  ctx.fillText('IDLE', L.thrCx + 22, L.slotBot - 3);
+  /* the levers move together */
   const ly = L.slotBot - S.throttle * (L.slotBot - L.slotTop);
-  ctx.save();
-  if (S.afterburner){ ctx.shadowColor = 'rgba(255,120,20,0.9)'; ctx.shadowBlur = 16; }
   ctx.fillStyle = 'rgba(0,0,0,0.5)';
-  roundRectPath(ctx, L.thrCx - 27, ly - 12 + 3, 54, 26, 8);
+  roundRectPath(ctx, L.thrCx - 30, ly - 11 + 3, 60, 24, 8);
   ctx.fill();
-  const lg = ctx.createLinearGradient(0, ly - 13, 0, ly + 13);
+  const lg = ctx.createLinearGradient(0, ly - 12, 0, ly + 12);
   lg.addColorStop(0, '#565b64'); lg.addColorStop(0.5, '#33363d'); lg.addColorStop(1, '#22242a');
   ctx.fillStyle = lg;
-  roundRectPath(ctx, L.thrCx - 27, ly - 13, 54, 26, 8);
+  roundRectPath(ctx, L.thrCx - 30, ly - 12, 60, 24, 8);
   ctx.fill();
-  ctx.shadowBlur = 0;
   ctx.strokeStyle = '#0b0c0e'; ctx.lineWidth = 1.5;
-  roundRectPath(ctx, L.thrCx - 27, ly - 13, 54, 26, 8);
+  roundRectPath(ctx, L.thrCx - 30, ly - 12, 60, 24, 8);
   ctx.stroke();
-  ctx.fillStyle = '#e63946';
-  ctx.fillRect(L.thrCx - 27, ly - 2.5, 54, 5);
+  ctx.fillStyle = '#2f7fd0';
+  ctx.fillRect(L.thrCx - 30, ly - 2, 60, 4);
   ctx.strokeStyle = 'rgba(255,255,255,0.22)'; ctx.lineWidth = 2;
-  for (const gx of [-14, 0, 14]){
-    ctx.beginPath(); ctx.moveTo(L.thrCx + gx, ly - 8); ctx.lineTo(L.thrCx + gx, ly - 4); ctx.stroke();
-    ctx.beginPath(); ctx.moveTo(L.thrCx + gx, ly + 4); ctx.lineTo(L.thrCx + gx, ly + 8); ctx.stroke();
+  for (const gx of [-19, 0, 19]){
+    ctx.beginPath(); ctx.moveTo(L.thrCx + gx, ly - 7); ctx.lineTo(L.thrCx + gx, ly - 4); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(L.thrCx + gx, ly + 4); ctx.lineTo(L.thrCx + gx, ly + 7); ctx.stroke();
   }
-  ctx.restore();
   ctx.fillStyle = '#8b93a3';
   ctx.font = '600 9px "Barlow Condensed", sans-serif';
   ctx.textAlign = 'center'; ctx.textBaseline = 'bottom';
-  ctx.fillText('THROTTLE', L.thrCx, z.y + z.h - 2);
+  ctx.fillText('THRUST', L.thrCx, z.y + z.h - 2);
   ctx.restore();
 }
 
-/* ---------------- the stick ---------------- */
-function drawStick(){
-  const st = L.stick;
-  const gx = st.x + S.bank * 30;
-  const gy = st.baseY - st.len + S.pitch * 15;
+/* ---------------- the yokes (twin columns, captain primary) ---------------- */
+function drawYoke(x, baseY, s){
+  const wheelY = baseY - 54 * s + S.pitchDeg * 0.85;
   ctx.save();
-  /* pedestal + boot */
+  /* column */
   ctx.fillStyle = '#101114';
   ctx.beginPath();
-  ctx.moveTo(st.x - 34, st.baseY + 6);
-  ctx.quadraticCurveTo(st.x - 20, st.baseY - st.len * 0.34, st.x - 9, st.baseY - st.len * 0.4);
-  ctx.lineTo(st.x + 9, st.baseY - st.len * 0.4);
-  ctx.quadraticCurveTo(st.x + 20, st.baseY - st.len * 0.34, st.x + 34, st.baseY + 6);
+  ctx.moveTo(x - 15 * s, baseY + 8);
+  ctx.lineTo(x - 8 * s, wheelY + 12 * s);
+  ctx.lineTo(x + 8 * s, wheelY + 12 * s);
+  ctx.lineTo(x + 15 * s, baseY + 8);
   ctx.closePath(); ctx.fill();
   ctx.strokeStyle = 'rgba(255,255,255,0.08)'; ctx.lineWidth = 1;
   ctx.stroke();
-  /* shaft */
-  ctx.strokeStyle = '#22242a';
-  ctx.lineWidth = 13; ctx.lineCap = 'round';
-  ctx.beginPath();
-  ctx.moveTo(st.x, st.baseY - st.len * 0.3);
-  ctx.lineTo(gx, gy + 16);
-  ctx.stroke();
-  ctx.strokeStyle = '#41454e';
-  ctx.lineWidth = 4;
-  ctx.beginPath();
-  ctx.moveTo(st.x - 2, st.baseY - st.len * 0.3);
-  ctx.lineTo(gx - 2, gy + 16);
-  ctx.stroke();
-  /* grip */
+  /* wheel: ram's-horn grips, turning with the bank */
   ctx.save();
-  ctx.translate(gx, gy);
-  ctx.rotate(S.bank * 0.32);
-  const gg = ctx.createLinearGradient(-15, 0, 15, 0);
-  gg.addColorStop(0, '#33363d'); gg.addColorStop(0.5, '#22242a'); gg.addColorStop(1, '#17181c');
-  ctx.fillStyle = gg;
-  roundRectPath(ctx, -14, -6, 28, 42, 10);
-  ctx.fill();
-  ctx.strokeStyle = '#0a0b0d'; ctx.lineWidth = 1.5;
-  roundRectPath(ctx, -14, -6, 28, 42, 10);
+  ctx.translate(x, wheelY);
+  ctx.rotate(rad(S.bankDeg) * 0.8);
+  ctx.scale(s, s);
+  ctx.strokeStyle = '#26282e';
+  ctx.lineWidth = 13; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+  ctx.beginPath();
+  ctx.moveTo(-38, 15);
+  ctx.lineTo(-38, 1);
+  ctx.quadraticCurveTo(-38, -9, -27, -9);
+  ctx.lineTo(27, -9);
+  ctx.quadraticCurveTo(38, -9, 38, 1);
+  ctx.lineTo(38, 15);
   ctx.stroke();
-  /* red button on top, trigger on the front */
+  ctx.strokeStyle = 'rgba(255,255,255,0.13)';
+  ctx.lineWidth = 3.5;
+  ctx.beginPath();
+  ctx.moveTo(-33, -6.5);
+  ctx.lineTo(33, -6.5);
+  ctx.stroke();
+  /* hub + button */
+  ctx.fillStyle = '#17181c';
+  ctx.beginPath(); ctx.arc(0, -4, 11, 0, 6.29); ctx.fill();
+  ctx.strokeStyle = 'rgba(255,255,255,0.14)'; ctx.lineWidth = 1.2;
+  ctx.beginPath(); ctx.arc(0, -4, 11, 0, 6.29); ctx.stroke();
   ctx.fillStyle = '#e63946';
-  ctx.beginPath(); ctx.arc(0, -4, 5.5, 0, 6.29); ctx.fill();
-  ctx.strokeStyle = '#7d1414'; ctx.lineWidth = 1.5;
-  ctx.beginPath(); ctx.arc(0, -4, 5.5, 0, 6.29); ctx.stroke();
-  ctx.fillStyle = '#c22f3d';
-  roundRectPath(ctx, 9, 8, 6, 12, 3);
-  ctx.fill();
-  ctx.strokeStyle = 'rgba(255,255,255,0.25)'; ctx.lineWidth = 2;
-  for (const fy of [16, 23, 30]){
-    ctx.beginPath(); ctx.moveTo(-9, fy); ctx.lineTo(6, fy); ctx.stroke();
-  }
+  ctx.beginPath(); ctx.arc(0, -4, 4, 0, 6.29); ctx.fill();
   ctx.restore();
   ctx.restore();
 }
@@ -1579,18 +1698,13 @@ function drawPanel(){
   drawScrew(10 + SAFE.l, y0 + 10); drawScrew(W - 10 - SAFE.r, y0 + 10);
   drawScrew(10 + SAFE.l, H - 10 - SAFE.b); drawScrew(W - 10 - SAFE.r, H - 10 - SAFE.b);
 
-  drawMap();
-  drawSwitches();
-  drawHorizonGauge();
-  drawAirspeed();
-  drawAltimeter();
-  drawVSI();
-  drawHeadingTape();
-  drawDataStack();
-  drawTerrainLamp();
-  drawRadar();
-  drawThrottle();
-  drawStick();
+  drawPFD();
+  drawND();
+  drawPlacard();
+  drawButtons();
+  drawActionButton();
+  drawThrust();
+  for (const yk of L.yokes) drawYoke(yk.x, L.yokeBaseY, yk.s);
 
   /* cozy dome glow in night-panel mode */
   if (S.lightsNight && S.power > 0.4){
@@ -1601,7 +1715,7 @@ function drawPanel(){
     ctx.fillStyle = dg;
     ctx.fillRect(0, y0, W, h);
   }
-  /* unpowered darkness lifts as the turbine spools */
+  /* unpowered darkness lifts as the engines spool */
   if (S.power < 1){
     ctx.fillStyle = 'rgba(2,4,8,' + ((1 - S.effPower) * 0.62) + ')';
     ctx.fillRect(0, y0, W, h + 2);
@@ -1609,94 +1723,151 @@ function drawPanel(){
 }
 
 /* ============================================================
-   UPDATE + MAIN LOOP
+   UPDATE — a heavy jet, flown gently.
+   Drag sets a TARGET attitude behind a generous dead zone;
+   pitch and bank ease toward it with strong damping and hard
+   rate caps. Release the sky and it settles back to level.
    ============================================================ */
 function update(dt){
   S.time += dt;
 
-  /* turbine spool-up after START ENGINES */
-  if (S.started && S.spool < 1) S.spool = Math.min(1, S.spool + dt / 2.8);
+  /* twin engines spool up after START ENGINES */
+  if (S.started && S.spool < 1) S.spool = Math.min(1, S.spool + dt / 3);
   S.power = S.spool;
-  S.effPower = S.spool >= 1 ? 1 : S.spool * (0.8 + 0.2 * Math.random());
+  S.effPower = S.spool >= 1 ? 1 : S.spool * (0.85 + 0.15 * Math.random());
 
-  /* ---- gather steering input ---- */
+  /* thrust levers walk toward their command when the plane drives */
+  if (S.autoThrottle){
+    S.throttle += clamp(S.throttleCmd - S.throttle, -dt * 0.55, dt * 0.55);
+  }
+
+  /* ---- steering input, with a generous dead zone ---- */
   let pIn = 0, bIn = 0;
   if (S.viewActive){ pIn = S.inPitch; bIn = S.inBank; }
   else if (S.tiltOn){ pIn = S.tiltPitch; bIn = S.tiltBank; }
-  if (S.autopilot && !S.viewActive){
-    /* gentle self-corrections — the stick visibly flies itself */
-    pIn = Math.sin(S.time * 0.9) * 0.05;
-    bIn = Math.sin(S.time * 0.5) * 0.08;
-  }
+  const dead = v => { const a = Math.abs(v); return a < 0.18 ? 0 : Math.sign(v) * (a - 0.18) / 0.82; };
+  let pitchTgt = 0, bankTgt = 0;
+  const prevAlt = S.altitude;
 
-  /* ---- ground assist: the jet can never crash ---- */
-  S.assist = S.started && S.spool > 0.6 && S.altitude < 1700;
-  if (S.assist){
-    const need = 0.3 + (1700 - S.altitude) / 1700 * 0.35;
-    if (pIn < need) pIn = need;
-    if (S.time > S.nextBeep){
-      AudioSys.assistBeep();
-      S.nextBeep = S.time + 1.15;
+  if (S.phase === 'ground'){
+    S.speed = Math.max(0, S.speed - dt * 14);
+  }
+  else if (S.phase === 'takeoff'){
+    const a = S.throttle * 15.5 - S.speed * 0.016 - 1.6;
+    S.speed = Math.max(0, S.speed + a * dt);
+    S.groundDist += S.speed * dt * 0.55;
+    if (S.speed >= 138) S.rotateProg = Math.min(1, S.rotateProg + dt / 1.7);
+    pitchTgt = 9.5 * smooth(S.rotateProg);
+    if (S.rotateProg > 0.5 && S.speed >= 145) liftoff();
+    /* abort only when the captain himself drags the levers back */
+    else if (!S.autoThrottle && S.throttle < 0.3 && S.speed < 15){ S.phase = 'ground'; }
+  }
+  else if (S.phase === 'air'){
+    pitchTgt = dead(pIn) >= 0 ? dead(pIn) * 10 : dead(pIn) * 8;
+    bankTgt = dead(bIn) * 22;
+    if (S.autopilot && !S.viewActive){
+      pitchTgt = Math.sin(S.time * 0.7) * 0.8;
+      bankTgt = Math.sin(S.time * 0.45) * 3;
     }
+    const agl = S.altitude - FIELD_ALT;
+    /* gentle climb-out bias after liftoff — but it yields the moment
+       the captain actually holds the yoke himself */
+    const pilotHolding = S.viewActive || (S.tiltOn && (Math.abs(pIn) > 0.01 || Math.abs(bIn) > 0.01));
+    if (agl < 2200 && !pilotHolding) pitchTgt = Math.max(pitchTgt, 8 * (1 - agl / 2200));
+    /* low-altitude assist: a soft floor near the ground that lifts
+       him gently — a cushion, not a wall */
+    S.assist = agl < 1100 && S.spool > 0.6;
+    if (S.assist){
+      const floor = (1100 - agl) / 1100 * 5.5;
+      if (pitchTgt < floor) pitchTgt = floor;
+      if (S.time > S.nextBeep){ AudioSys.assistBeep(); S.nextBeep = S.time + 1.4; }
+    } else S.assist = false;
+    if (S.altitude > 37200 && pitchTgt > 0) pitchTgt = 0;
+    /* stately speed: thrust sets a target, the jet drifts toward it */
+    const tSpeed = 250 + S.throttle * 230 - ((S.gearDown || S.gearTransit > 0) ? 18 : 0);
+    S.speed += (tSpeed - S.speed) * Math.min(dt / 3.4, 1);
+    S.groundDist += S.speed * dt * 0.55;
+    /* vertical speed from attitude, gentle by airliner standards */
+    const vsInst = S.pitchDeg * 135 * clamp(S.speed / 220, 0.55, 1);
+    S.altitude = clamp(S.altitude + vsInst * dt / 60, FIELD_ALT, 38500);
+    /* heading follows the bank, slowly */
+    const hRate = (S.bankDeg / 22) * 2.1 * (S.speed > 60 ? 1 : S.speed / 60);
+    S.heading = ((S.heading + hRate * dt) % 360 + 360) % 360;
+    /* the gear comes up by itself if he forgets */
+    if (S.gearAutoT > 0 && S.time > S.gearAutoT){
+      S.gearAutoT = -1;
+      if (S.gearDown) doGear(false);
+    }
+    if (S.gearHintT > 0) S.gearHintT -= dt;
+    if (S.posRateT > 0 && S.time > S.posRateT){ S.posRateT = -1; AudioSys.positiveRate(); }
+    if (agl > 2400) S.airportVis = false;
   }
-  if (S.altitude > 39500 && pIn > 0) pIn = 0;   /* top of the sky */
+  else if (S.phase === 'landing'){
+    S.landT += dt;
+    const p = clamp(S.landT / S.landDur, 0, 1);
+    S.landP = p;
+    const e = easeInOut(p);
+    S.altitude = FIELD_ALT + (S.landStartAlt - FIELD_ALT) * Math.pow(1 - p, 1.25);
+    const tSpeed = lerp(S.landStartSpeed, 126, e);
+    S.speed += (tSpeed - S.speed) * Math.min(dt * 1.2, 1);
+    S.throttle = lerp(S.landStartThr, 0.22, e);
+    S.throttleCmd = S.throttle;
+    let herr = ((0 - S.heading + 540) % 360) - 180;
+    S.heading = ((S.heading + clamp(herr, -dt * 2.2, dt * 2.2)) % 360 + 360) % 360;
+    bankTgt = clamp(herr * 0.25, -7, 7) * (1 - p * 0.7) + Math.sin(p * 9) * 1.2 * (1 - p);
+    pitchTgt = p < 0.82 ? 1.2 : 1.2 + (p - 0.82) / 0.18 * 3.6;
+    S.groundDist += S.speed * dt * 0.55;
+    /* the helper makes sure the gear is down for him */
+    if (p > 0.8 && !S.gearDown && S.gearTransit === 0) doGear(true);
+    if (p >= 1) touchdown();
+  }
+  else if (S.phase === 'rollout'){
+    S.speed = Math.max(0, S.speed + (-S.speed * 0.32 - 5) * dt);
+    S.groundDist += S.speed * dt * 0.55;
+    if (S.speed <= 1.5){ S.speed = 0; arrive(); }
+  }
 
-  /* ---- attitude eases toward input; release = gentle self-level ---- */
-  const rate = Math.min(3.4 * dt, 1);
-  S.pitch += (pIn - S.pitch) * rate;
-  S.bank += (bIn - S.bank) * rate;
+  /* ---- attitude: heavy damping, hard rate caps, no snap ---- */
+  const pStep = clamp((pitchTgt - S.pitchDeg) * Math.min(dt / 0.8, 1), -4.2 * dt, 4.2 * dt);
+  S.pitchDeg += pStep;
+  const bStep = clamp((bankTgt - S.bankDeg) * Math.min(dt / 1.0, 1), -11 * dt, 11 * dt);
+  S.bankDeg += bStep;
+  if (S.phase === 'ground' || S.phase === 'rollout'){ S.pitchDeg = Math.max(0, S.pitchDeg - dt * 6); S.bankDeg *= Math.max(0, 1 - dt * 3); }
 
-  /* ---- speed follows the throttle (gear drags, burner boosts) ---- */
-  const gearDrag = (S.gearDown || S.gearTransit > 0) ? 55 : 0;
-  let target = 128 + S.throttle * 452 - gearDrag;
-  if (S.afterburner) target = 795 - gearDrag;
-  if (!S.started) target = 0;
-  S.speed += (target - S.speed) * Math.min(dt * (S.afterburner ? 0.9 : 0.55), 1);
-
-  /* ---- heading, altitude, distance ---- */
-  const hRate = S.bank * 26 * (0.35 + 0.65 * clamp(S.speed / 600, 0, 1));
-  S.heading = ((S.heading + hRate * dt) % 360 + 360) % 360;
-  S.vs = S.spool > 0.05 ? S.pitch * (1400 + S.speed * 6.2) : 0;
-  if (S.started) S.altitude += S.vs / 60 * dt;
-  S.altitude = clamp(S.altitude, 950, 42000);
-  S.dist += S.speed * dt * 0.55;
+  /* VSI is the truth: derived from the altitude the model produced */
+  const rawVs = dt > 0 ? (S.altitude - prevAlt) / dt * 60 : 0;
+  S.vs += (rawVs - S.vs) * Math.min(dt * 2.5, 1);
+  if (S.phase === 'ground' || S.phase === 'rollout' || S.phase === 'takeoff') S.vs *= Math.max(0, 1 - dt * 4);
+  S.dist += S.speed * dt * 0.5;
 
   /* ---- timers ---- */
   if (S.gearTransit > 0){
-    S.gearTransit = Math.max(0, S.gearTransit - dt / 1.5);
-    if (S.gearTransit === 0) AudioSys.clunk(0.55);
+    S.gearTransit = Math.max(0, S.gearTransit - dt / 1.4);
+    if (S.gearTransit === 0) AudioSys.clunk(0.5);
   }
   if (S.radioT > 0) S.radioT -= dt;
-  if (S.rollAnim >= 0){
-    S.rollAnim += dt / 1.7;
-    if (S.rollAnim >= 1){ S.rollAnim = -1; S.rollOffset = 0; }
-    else S.rollOffset = easeInOut(S.rollAnim) * Math.PI * 2;
-  }
+  if (S.shakeT > 0) S.shakeT = Math.max(0, S.shakeT - dt);
+  if (S.celebrateT > 0) S.celebrateT -= dt;
   S.sweepA += dt * 1.15;
 
-  /* ---- clouds stream faster with speed; streaks at real pace ---- */
-  const dz = dt * (0.045 + (S.speed / 850) * 0.17 + (S.afterburner ? 0.05 : 0));
+  /* clouds drift past, slower and softer than a fighter's */
+  const dz = dt * (0.018 + (S.speed / 480) * 0.05);
   for (const c of clouds){
     c.z -= dz * (0.7 + c.s0 * 0.4);
     if (c.z <= 0.02) Object.assign(c, newCloud(false));
   }
-  if (S.speed > 430 && Math.random() < dt * 14){
-    const leftSide = Math.random() < 0.5;
-    streaks.push({
-      x: leftSide ? L.view.x + rand(0, 30) : L.view.x + L.view.w - rand(0, 30),
-      y: L.view.y + rand(10, L.view.h - 10),
-      vx: (leftSide ? -1 : 1) * rand(-1, 1) * 0 + (leftSide ? -rand(500, 850) : rand(500, 850)),
-      w: rand(1.5, 3), life: rand(0.3, 0.55)
-    });
-  }
-  for (let i = streaks.length - 1; i >= 0; i--){
-    const s = streaks[i];
-    s.x += s.vx * dt;
-    s.life -= dt * 1.6;
-    if (s.life <= 0 || s.x < L.view.x - 120 || s.x > L.view.x + L.view.w + 120) streaks.splice(i, 1);
+  /* confetti physics */
+  for (let i = confetti.length - 1; i >= 0; i--){
+    const p = confetti[i];
+    p.x += p.vx * dt + Math.sin(S.time * 3 + i) * 12 * dt;
+    p.y += p.vy * dt;
+    p.rot += p.vr * dt;
+    p.life -= dt;
+    if (p.life <= 0 || p.y > L.view.y + L.view.h + 16) confetti.splice(i, 1);
   }
 
-  AudioSys.update(S.spool, S.throttle, S.speed, S.afterburner, S.gearTransit);
+  const onGround = S.phase === 'ground' || S.phase === 'takeoff' || S.phase === 'rollout';
+  AudioSys.update(S.spool, S.throttle, S.speed, onGround, S.gearTransit);
 }
 
 let lastTs = 0;
@@ -1721,7 +1892,7 @@ function resize(){
 window.addEventListener('resize', resize);
 window.addEventListener('orientationchange', () => setTimeout(resize, 60));
 
-makeCloudSprite();
+makeSprites();
 buildScenery();
 resize();
 requestAnimationFrame(frame);
